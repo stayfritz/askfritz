@@ -17,6 +17,8 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV LOG_LEVEL=info
 
+RUN apk add --no-cache wget
+
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
