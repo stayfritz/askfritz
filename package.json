@@ -17,9 +17,12 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1",
     "@hono/node-server": "^1.13.7",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.36.4",
+    "dropbox": "^10.34.0",
+    "googleapis": "^173.0.0",
     "hono": "^4.6.12",
     "pg": "^8.13.1",
     "pino": "^9.5.0",
