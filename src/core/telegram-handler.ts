@@ -191,7 +191,7 @@ export function registerTelegramHandlers(
 
     await ctx.api.sendChatAction(ctx.chat.id, 'typing')
     try {
-      const answer = await answerQuery(text)
+      const answer = await answerQuery(text, { userId: ctx.from!.id })
       await ctx.reply(answer)
     } catch (err) {
       logger.error({ err }, 'query failed')
