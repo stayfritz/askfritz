@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { logger as honoLogger } from 'hono/logger'
+import { migrate } from 'drizzle-orm/node-postgres/migrator'
 import 'dotenv/config'
 import { logger } from './lib/logger.js'
 import { gmailWebhook } from './routes/gmail-webhook.js'
@@ -13,6 +14,7 @@ import {
 } from './integrations/telegram/bot.js'
 import { registerTelegramHandlers } from './core/telegram-handler.js'
 import { registerNotifier } from './lib/notifier.js'
+import { db } from './integrations/postgres/db.js'
 
 const app = new Hono()
 
@@ -33,6 +35,10 @@ app.route('/webhooks/gmail', gmailWebhook)
 
 async function bootstrap(): Promise<void> {
   logger.info('booting askfritz...')
+
+  logger.info('running migrations...')
+  await migrate(db, { migrationsFolder: './migrations' })
+  logger.info('migrations applied')
 
   logger.info('syncing config to DB...')
   await syncConfigToDb()

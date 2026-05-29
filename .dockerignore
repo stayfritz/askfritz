@@ -1,0 +1,30 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+.git
+.github
+.vscode
+.idea
+*.log
+logs
+
+# Local dev / debug scripts not needed in image
+scripts/debug-*.ts
+scripts/inbox-debug.ts
+scripts/smoke-test.ts
+scripts/classify-test.ts
+scripts/ingest-test.ts
+scripts/poll-once.ts
+scripts/dropbox-auth.ts
+scripts/sync.ts
+
+# Docs (image stays lean)
+docs
+tests
+README.md
+
+# OS
+.DS_Store
+Thumbs.db
