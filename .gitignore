@@ -1,0 +1,27 @@
+# Node
+node_modules/
+dist/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# Per-user config (uncomment when extracting OSS core)
+# config/system.yaml
+# config/domains.yaml
+# config/persons.yaml
+# config/policies.yaml
+# config/routing.yaml

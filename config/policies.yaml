@@ -1,0 +1,30 @@
+# Approval policy per domain.
+#
+# - require_approval: action types ALWAYS need user freigabe before execution.
+# - allow_auto: action types may proceed automatically, only logged.
+#
+# Action types currently recognized:
+#   send_email, send_message, schedule_meeting,
+#   file_document, update_topic_status, create_task,
+#   mark_thread_status, mark_topic_done
+
+policies:
+  default:
+    require_approval:
+      - send_email
+      - send_message
+      - schedule_meeting
+    allow_auto:
+      - file_document
+      - update_topic_status
+      - create_task
+      - mark_thread_status
+
+  stayfritz_spain:
+    inherit: default
+    require_approval:
+      # Bei Steuer/Bank/Versicherung NICHTS ohne Freigabe rausschicken.
+      - send_email
+      - send_message
+      - schedule_meeting
+      - mark_topic_done

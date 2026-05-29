@@ -1,0 +1,31 @@
+persons:
+  - id: anke
+    domain_id: stayfritz_spain
+    name: Anke Svenester
+    role: service_provider:insurance_admin
+    emails: []        # TODO: echte Email-Adresse(n) eintragen
+    phones: []        # TODO: optional, Telefon/WhatsApp
+    language: de
+    notes: |
+      Dienstleisterin für Versicherungen, Ummeldungen und administrative
+      Themen rund um StayFritz Spain SL.
+
+  # TODO: Steuerberater(in) in Spanien hinzufügen, sobald bekannt
+  # - id: stb_<slug>
+  #   domain_id: stayfritz_spain
+  #   name: <Vollständiger Name>
+  #   role: tax_advisor
+  #   emails: [<email>]
+  #   phones: []
+  #   language: es
+  #   notes: |
+  #     Steuerberater(in) für StayFritz Spain SL. Korrespondenz auf Spanisch.
+
+  # TODO: Bankberater(in) hinzufügen, sobald bekannt
+  # - id: bankberater_<bank>
+  #   domain_id: stayfritz_spain
+  #   name: <Vollständiger Name>
+  #   role: banker:<bank>
+  #   emails: [<email>]
+  #   phones: []
+  #   language: de

@@ -1,0 +1,19 @@
+# Maps inbound channels to classification hints.
+# The LLM classifier still has final word; this just provides a prior.
+
+inbound:
+  email:
+    fritz@stayfritz.com:
+      default_domain: null   # let classifier decide based on sender + content
+      classification_hint: |
+        This inbox is Thomas's personal Stabschef inbox. Senders may belong
+        to different domains. For v0, only the `stayfritz_spain` domain is
+        configured. If a sender doesn't match any known person or topic,
+        flag for manual review rather than guessing.
+
+# v2: WhatsApp routing
+# whatsapp:
+#   <number_de>:
+#     default_domain: privat
+#   <number_es>:
+#     default_domain: stayfritz_spain

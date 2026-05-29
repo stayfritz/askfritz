@@ -1,0 +1,18 @@
+language:
+  default: de   # default reply/UI language unless overridden
+
+timezone: Europe/Berlin
+
+dropbox:
+  root: /fritzai
+
+email:
+  primary: fritz@stayfritz.com   # Workspace user, Gmail API connected here
+  signature: |
+    Beste Grüße
+    Fritz (Assistent von Thomas)
+
+llm:
+  classifier_model: claude-haiku-4-5-20251001   # fast, cheap, plenty for routing/classification
+  default_model: claude-sonnet-4-6              # default for drafting + reasoning
+  heavy_model: claude-opus-4-7                  # opt-in for complex synthesis

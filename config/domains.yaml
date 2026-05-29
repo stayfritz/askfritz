@@ -1,0 +1,18 @@
+domains:
+  - id: stayfritz_spain
+    name: StayFritz Spain
+    description: |
+      Spanische GmbH (StayFritz Spain SL). Themen rund um spanische Steuer,
+      Sozialversicherung, Krankenversicherung, Bankkonto, Ummeldungen.
+    default_language: de
+
+  # Spätere Domains (kommen nach v0):
+  # - id: privat
+  #   name: Privat
+  #   description: Privatleben, Verträge, Versicherungen (DE).
+  #   default_language: de
+  #
+  # - id: familie
+  #   name: Familie
+  #   description: Kinder, Schule, Arzt, Familien-Logistik.
+  #   default_language: de
