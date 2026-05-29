@@ -6,6 +6,12 @@ import { logger } from './lib/logger.js'
 import { gmailWebhook } from './routes/gmail-webhook.js'
 import { syncConfigToDb } from './core/sync-config.js'
 import { GmailPoller } from './core/poller.js'
+import {
+  getAllowedUserId,
+  isTelegramConfigured,
+  makeBot,
+} from './integrations/telegram/bot.js'
+import { registerTelegramHandlers } from './core/telegram-handler.js'
 
 const app = new Hono()
 
@@ -33,18 +39,39 @@ async function bootstrap(): Promise<void> {
   const poller = new GmailPoller()
   poller.start()
 
+  let bot: ReturnType<typeof makeBot> | null = null
+  if (isTelegramConfigured()) {
+    bot = makeBot()
+    const allowedUserId = getAllowedUserId()
+    registerTelegramHandlers(bot, allowedUserId)
+    void bot.start({
+      drop_pending_updates: true,
+      onStart: (info) => {
+        logger.info(
+          { username: info.username, allowedUserId },
+          'telegram bot started',
+        )
+      },
+    })
+  } else {
+    logger.warn(
+      'telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_USER_ID), skipping',
+    )
+  }
+
   const port = Number(process.env.PORT ?? 3000)
   serve({ fetch: app.fetch, port }, (info) => {
     logger.info({ port: info.port }, 'askfritz listening')
   })
 
-  const shutdown = (signal: string) => {
+  const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down')
     poller.stop()
+    if (bot) await bot.stop()
     process.exit(0)
   }
-  process.on('SIGTERM', () => shutdown('SIGTERM'))
-  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => void shutdown('SIGTERM'))
+  process.on('SIGINT', () => void shutdown('SIGINT'))
 }
 
 bootstrap().catch((err) => {
