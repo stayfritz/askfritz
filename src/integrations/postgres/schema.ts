@@ -176,6 +176,7 @@ export const tasks = pgTable(
     topicId: text('topic_id').references(() => topics.id, {
       onDelete: 'set null',
     }),
+    relatedDocumentId: uuid('related_document_id'),
     description: text('description').notNull(),
     status: taskStatus('status').notNull().default('pending_user'),
     draftContent: text('draft_content'),

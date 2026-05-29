@@ -89,6 +89,10 @@ export interface ParsedMessage {
   bodyText: string
   bodyHtml?: string
   attachments: ParsedAttachment[]
+  /** RFC822 `Message-ID` header value, including angle brackets. Needed to thread replies. */
+  messageIdHeader?: string
+  /** RFC822 `References` header chain, for proper reply threading. */
+  referencesHeader?: string
 }
 
 function decodeBase64Url(data: string): string {
@@ -151,6 +155,9 @@ export function parseMessage(raw: gmail_v1.Schema$Message): ParsedMessage {
     walkParts(raw.payload?.parts)
   }
 
+  const messageIdHeader = getHeader('Message-ID') || getHeader('Message-Id') || undefined
+  const referencesHeader = getHeader('References') || undefined
+
   return {
     id: raw.id ?? '',
     threadId: raw.threadId ?? '',
@@ -161,7 +168,57 @@ export function parseMessage(raw: gmail_v1.Schema$Message): ParsedMessage {
     bodyText,
     bodyHtml,
     attachments,
+    messageIdHeader,
+    referencesHeader,
   }
+}
+
+export interface ReplyParams {
+  to: string
+  subject: string
+  body: string
+  inReplyTo: string
+  references?: string
+  threadId?: string
+}
+
+function encodeHeaderValue(value: string): string {
+  // Quoted-printable for non-ASCII subjects (RFC 2047)
+  if (/^[\x20-\x7e]*$/.test(value)) return value
+  const base64 = Buffer.from(value, 'utf-8').toString('base64')
+  return `=?UTF-8?B?${base64}?=`
+}
+
+function buildRawMessage(params: ReplyParams): string {
+  const refs = params.references
+    ? `${params.references} ${params.inReplyTo}`
+    : params.inReplyTo
+  const headers = [
+    `To: ${params.to}`,
+    `Subject: ${encodeHeaderValue(params.subject)}`,
+    `In-Reply-To: ${params.inReplyTo}`,
+    `References: ${refs}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+  ].join('\r\n')
+  const raw = headers + '\r\n\r\n' + params.body
+  return Buffer.from(raw, 'utf-8').toString('base64url')
+}
+
+export async function sendReply(
+  gmail: gmail_v1.Gmail,
+  params: ReplyParams,
+): Promise<string> {
+  const raw = buildRawMessage(params)
+  const result = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw,
+      threadId: params.threadId,
+    },
+  })
+  return result.data.id ?? ''
 }
 
 export async function downloadAttachment(

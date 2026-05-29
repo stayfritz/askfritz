@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD COLUMN "related_document_id" uuid;

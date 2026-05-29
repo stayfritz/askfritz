@@ -16,7 +16,9 @@ import {
   uploadFile,
 } from '../integrations/dropbox/client.js'
 import { classify, type Classification } from './classifier.js'
+import { draftReply } from './drafter.js'
 import { logger } from '../lib/logger.js'
+import { notifyDraft } from '../lib/notifier.js'
 
 export interface IngestionResult {
   messageId: string
@@ -111,13 +113,43 @@ export async function ingestMessage(
 
     let taskCreated = false
     if (classification.intent === 'action_required' && doc?.id) {
-      await db.insert(tasks).values({
-        topicId,
-        description: classification.summary,
-        status: 'pending_user',
-        requiresDecision: true,
-      })
+      let draft: string | null = null
+      try {
+        draft = await draftReply({
+          originalFrom: parsed.from,
+          originalSubject: parsed.subject,
+          originalBody: parsed.bodyText,
+          language: classification.language,
+          summary: classification.summary,
+        })
+      } catch (err) {
+        logger.error({ err, messageId: parsed.id }, 'draft generation failed')
+      }
+
+      const [task] = await db
+        .insert(tasks)
+        .values({
+          topicId,
+          relatedDocumentId: doc.id,
+          description: classification.summary,
+          status: 'pending_user',
+          requiresDecision: true,
+          draftContent: draft,
+        })
+        .returning({ id: tasks.id })
       taskCreated = true
+
+      if (task?.id && draft) {
+        await notifyDraft({
+          taskId: task.id,
+          fromName: parsed.from.name,
+          fromEmail: parsed.from.email,
+          subject: parsed.subject,
+          summary: classification.summary,
+          draftText: draft,
+          urgency: classification.urgency,
+        })
+      }
     }
 
     await upsertThread({

@@ -12,6 +12,7 @@ import {
   makeBot,
 } from './integrations/telegram/bot.js'
 import { registerTelegramHandlers } from './core/telegram-handler.js'
+import { registerNotifier } from './lib/notifier.js'
 
 const app = new Hono()
 
@@ -44,6 +45,7 @@ async function bootstrap(): Promise<void> {
     bot = makeBot()
     const allowedUserId = getAllowedUserId()
     registerTelegramHandlers(bot, allowedUserId)
+    registerNotifier(bot, allowedUserId)
     void bot.start({
       drop_pending_updates: true,
       onStart: (info) => {
