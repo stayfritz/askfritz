@@ -52,15 +52,26 @@ async function bootstrap(): Promise<void> {
     const allowedUserId = getAllowedUserId()
     registerTelegramHandlers(bot, allowedUserId)
     registerNotifier(bot, allowedUserId)
-    void bot.start({
-      drop_pending_updates: true,
-      onStart: (info) => {
-        logger.info(
-          { username: info.username, allowedUserId },
-          'telegram bot started',
+    // Catch bot.start() crashes so the process stays up even if Telegram
+    // long-polling fails (e.g. 409 Conflict when another instance is running).
+    // App still serves /health, polls Gmail, etc. — only Telegram is silent
+    // until the conflicting instance dies.
+    bot
+      .start({
+        drop_pending_updates: true,
+        onStart: (info) => {
+          logger.info(
+            { username: info.username, allowedUserId },
+            'telegram bot started',
+          )
+        },
+      })
+      .catch((err) => {
+        logger.error(
+          { err: err instanceof Error ? err.message : err },
+          'telegram bot crashed — process continues, will retry on next restart',
         )
-      },
-    })
+      })
   } else {
     logger.warn(
       'telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_USER_ID), skipping',
