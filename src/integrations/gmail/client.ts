@@ -27,15 +27,26 @@ export interface ListedMessage {
 }
 
 /**
- * List inbox messages newer than the given duration.
- * Uses Gmail's query syntax: `newer_than:Nm` (minutes).
+ * List inbox messages. Filters:
+ *  - `afterTimestamp` (epoch seconds, preferred for polling): use Gmail's `after:` operator
+ *  - `newerThanDays` (rougher, useful for one-shot queries): uses `newer_than:Nd`
+ *  - both omitted: returns the most recent N inbox messages
  */
 export async function listRecentInbox(
   gmail: gmail_v1.Gmail,
-  options: { newerThanMinutes?: number; maxResults?: number } = {},
+  options: {
+    afterTimestamp?: number
+    newerThanDays?: number
+    maxResults?: number
+  } = {},
 ): Promise<ListedMessage[]> {
-  const minutes = options.newerThanMinutes ?? 5
-  const q = `in:inbox newer_than:${minutes}m`
+  const qParts = ['label:inbox']
+  if (options.afterTimestamp !== undefined) {
+    qParts.push(`after:${Math.floor(options.afterTimestamp)}`)
+  } else if (options.newerThanDays !== undefined) {
+    qParts.push(`newer_than:${options.newerThanDays}d`)
+  }
+  const q = qParts.join(' ')
 
   const { data } = await gmail.users.messages.list({
     userId: 'me',

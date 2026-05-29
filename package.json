@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:sync": "tsx scripts/sync.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
