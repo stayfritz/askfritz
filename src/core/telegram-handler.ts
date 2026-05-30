@@ -9,6 +9,7 @@ import {
 import { answerQuery } from './query.js'
 import { draftReply } from './drafter.js'
 import { notifyDraft } from '../lib/notifier.js'
+import { resetConversation } from '../lib/conversation-store.js'
 import {
   fetchMessage,
   makeGmailClient,
@@ -95,6 +96,13 @@ export function registerTelegramHandlers(
       `📊 Stand:\n\n` +
         `📋 ${pendingTasks.length} Tasks pending • ${openTopics.length} offene Topics\n\n` +
         (tasksList ? `Top Tasks:\n\n${tasksList}` : '(keine Tasks)'),
+    )
+  })
+
+  bot.command('reset', async (ctx) => {
+    resetConversation(ctx.from!.id)
+    await ctx.reply(
+      '🧹 Konversations-Verlauf gelöscht. Nächste Nachricht startet frisch.',
     )
   })
 

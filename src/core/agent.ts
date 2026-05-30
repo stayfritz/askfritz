@@ -23,18 +23,21 @@ function toAnthropicTool(
 
 export interface AgentResult {
   text: string
+  finalMessages: Anthropic.MessageParam[]
   iterations: number
   toolCalls: Array<{ name: string; input: unknown; ok: boolean }>
 }
 
 export async function runAgent(
-  userPrompt: string,
+  newUserMessage: string,
   systemPrompt: string,
+  history: Anthropic.MessageParam[],
   ctx: ToolContext,
 ): Promise<AgentResult> {
   const tools = allTools.map(toAnthropicTool)
   const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: userPrompt },
+    ...history,
+    { role: 'user', content: newUserMessage },
   ]
   const toolCalls: AgentResult['toolCalls'] = []
 
@@ -51,8 +54,10 @@ export async function runAgent(
       const textBlock = response.content.find(
         (b): b is Anthropic.TextBlock => b.type === 'text',
       )
+      messages.push({ role: 'assistant', content: response.content })
       return {
         text: textBlock?.text ?? '',
+        finalMessages: messages,
         iterations: i + 1,
         toolCalls,
       }
@@ -66,8 +71,10 @@ export async function runAgent(
       const textBlock = response.content.find(
         (b): b is Anthropic.TextBlock => b.type === 'text',
       )
+      messages.push({ role: 'assistant', content: response.content })
       return {
         text: textBlock?.text ?? '(Agent stopped without final response.)',
+        finalMessages: messages,
         iterations: i + 1,
         toolCalls,
       }
@@ -125,6 +132,7 @@ export async function runAgent(
 
   return {
     text: '(Agent reached max iterations without finalizing.)',
+    finalMessages: messages,
     iterations: MAX_ITERATIONS,
     toolCalls,
   }
