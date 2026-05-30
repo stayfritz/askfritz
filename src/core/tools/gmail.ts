@@ -15,7 +15,7 @@ const searchInput = z.object({
   query: z
     .string()
     .describe(
-      'Gmail search query using standard operators (e.g. "from:alerts@replit.com", "subject:invoice newer_than:30d", "label:inbox is:unread"). Combine with spaces (AND).',
+      'Gmail search query using standard operators. Searches ALL mail by default — add scope explicitly. Examples: "in:sent to:rothauski apartments" (sent folder), "from:alerts@replit.com" (inbox + everywhere), "label:inbox is:unread", "subject:invoice newer_than:30d", "in:anywhere from:me". Combine with spaces (AND).',
     ),
   max_results: z
     .number()
@@ -30,6 +30,7 @@ interface SearchResult {
   message_id: string
   thread_id: string
   from: string
+  to: string
   subject: string
   date: string
   snippet: string
@@ -41,7 +42,7 @@ export const gmailSearchMessages: Tool<
 > = {
   name: 'gmail_search_messages',
   description:
-    'Search the connected Gmail inbox using Gmail query syntax. Returns up to max_results messages with sender, subject, date, snippet. Read-only.',
+    'Search Gmail (all folders — inbox, sent, archive, labels) using Gmail query syntax. Returns sender, recipient, subject, date, snippet. Snippets are short (~200 chars) — for full content of a specific hit, follow up with gmail_get_message. Read-only.',
   inputSchema: searchInput,
   execute: async (input) => {
     const gmail = makeGmailClient()
@@ -65,6 +66,7 @@ export const gmailSearchMessages: Tool<
         from: parsed.from.name
           ? `${parsed.from.name} <${parsed.from.email}>`
           : parsed.from.email,
+        to: parsed.to.join(', '),
         subject: parsed.subject,
         date: parsed.receivedAt.toISOString(),
         snippet: (raw.snippet ?? '').slice(0, 200),
@@ -72,6 +74,75 @@ export const gmailSearchMessages: Tool<
     }
 
     return { count: messages.length, messages }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// gmail_get_message
+// ---------------------------------------------------------------------------
+
+const getMessageInput = z.object({
+  message_id: z
+    .string()
+    .describe(
+      'Gmail message_id (from gmail_search_messages). Returns full parsed body + headers for that single message.',
+    ),
+  max_body_chars: z
+    .number()
+    .int()
+    .min(500)
+    .max(20000)
+    .default(6000)
+    .describe(
+      'Max chars of body to return (default 6000, hard cap 20000 for token budget).',
+    ),
+})
+
+interface GetMessageResult {
+  message_id: string
+  thread_id: string
+  from: string
+  to: string
+  subject: string
+  date: string
+  body: string
+  body_truncated: boolean
+  attachments: Array<{ filename: string; mime_type: string }>
+}
+
+export const gmailGetMessage: Tool<
+  z.infer<typeof getMessageInput>,
+  GetMessageResult
+> = {
+  name: 'gmail_get_message',
+  description:
+    'Fetch the full body + headers of one Gmail message by id. Use after gmail_search_messages when the snippet is not enough to identify or quote from the right mail. Read-only.',
+  inputSchema: getMessageInput,
+  execute: async (input) => {
+    const gmail = makeGmailClient()
+    const raw = await fetchMessage(gmail, input.message_id)
+    const parsed = parseMessage(raw)
+    const fullBody = parsed.bodyText ?? ''
+    const truncated = fullBody.length > input.max_body_chars
+    const body = truncated
+      ? fullBody.slice(0, input.max_body_chars) + '\n[...truncated]'
+      : fullBody
+    return {
+      message_id: parsed.id,
+      thread_id: parsed.threadId,
+      from: parsed.from.name
+        ? `${parsed.from.name} <${parsed.from.email}>`
+        : parsed.from.email,
+      to: parsed.to.join(', '),
+      subject: parsed.subject,
+      date: parsed.receivedAt.toISOString(),
+      body,
+      body_truncated: truncated,
+      attachments: parsed.attachments.map((a) => ({
+        filename: a.filename,
+        mime_type: a.mimeType,
+      })),
+    }
   },
 }
 
