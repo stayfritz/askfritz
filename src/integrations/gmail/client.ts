@@ -31,6 +31,10 @@ export interface ListedMessage {
  *  - `afterTimestamp` (epoch seconds, preferred for polling): use Gmail's `after:` operator
  *  - `newerThanDays` (rougher, useful for one-shot queries): uses `newer_than:Nd`
  *  - both omitted: returns the most recent N inbox messages
+ *
+ * Paginates through ALL matching messages up to `maxTotal` (default 500).
+ * Earlier versions stopped at the first Gmail page (~50 results), which
+ * silently dropped older messages once the watermark advanced past them.
  */
 export async function listRecentInbox(
   gmail: gmail_v1.Gmail,
@@ -38,6 +42,7 @@ export async function listRecentInbox(
     afterTimestamp?: number
     newerThanDays?: number
     maxResults?: number
+    pageSize?: number
   } = {},
 ): Promise<ListedMessage[]> {
   const qParts = ['label:inbox']
@@ -47,17 +52,29 @@ export async function listRecentInbox(
     qParts.push(`newer_than:${options.newerThanDays}d`)
   }
   const q = qParts.join(' ')
+  const maxTotal = options.maxResults ?? 500
+  const pageSize = options.pageSize ?? 100
 
-  const { data } = await gmail.users.messages.list({
-    userId: 'me',
-    q,
-    maxResults: options.maxResults ?? 50,
-  })
+  const out: ListedMessage[] = []
+  let pageToken: string | undefined
 
-  return (data.messages ?? []).filter(
-    (m): m is ListedMessage =>
-      typeof m.id === 'string' && typeof m.threadId === 'string',
-  )
+  while (out.length < maxTotal) {
+    const { data } = await gmail.users.messages.list({
+      userId: 'me',
+      q,
+      maxResults: Math.min(pageSize, maxTotal - out.length),
+      ...(pageToken ? { pageToken } : {}),
+    })
+    for (const m of data.messages ?? []) {
+      if (typeof m.id === 'string' && typeof m.threadId === 'string') {
+        out.push({ id: m.id, threadId: m.threadId })
+      }
+    }
+    if (!data.nextPageToken) break
+    pageToken = data.nextPageToken
+  }
+
+  return out
 }
 
 export async function fetchMessage(

@@ -35,7 +35,8 @@ Life-State-Tools:
 
 Verhalten:
 - Wenn Thomas eine Aktion will, NUTZE die Tools direkt. Frag nicht erst "soll ich" — mach es, dann melde Ergebnis.
-- Bei zeitlichen Bezügen ("gestern", "seit gestern Abend", "letzte Woche", "die letzten 24h") IMMER ZUERST gmail_search_messages mit "newer_than:Xd" oder "after:UNIX_TS" aufrufen — sonst hat Fritz keinen Bezug zu dem was Thomas meint.
+- Bei JEDEM Zeitbezug ("heute", "gestern", "seit gestern Abend", "diese Woche", "letzte Woche", "die letzten N Tage/Stunden/Wochen", "neulich", "kürzlich", "Wochenende") IMMER ZUERST gmail_search_messages mit "newer_than:Nd" (oder "after:UNIX_TS") aufrufen. Der Life State unten zeigt nur einen kuratierten Auszug, nicht alles. Verlasse dich NIEMALS allein darauf, wenn die Frage einen Zeitraum nennt.
+- Wenn der Life State unten einen Hinweis wie "(+N weitere ähnliche Alerts)" enthält, dann WURDEN Mails komprimiert — bei Detail-Fragen ggf. gmail_search_messages nutzen, um den vollen Stand zu sehen.
 - Bei "filter X weg" oder "weniger Mails von Y": kombiniere gmail_filter_create + gmail_archive_matching, damit auch bestehende Mails verschwinden.
 - Bei Newsletter-Abmeldung: erst gmail_search_messages für eine konkrete message_id, dann gmail_unsubscribe.
 - Wenn Thomas im Folge-Turn auf jemand/etwas aus deiner vorherigen Antwort verweist (z.B. "danke Jessica"), nutze deinen Konversations-Verlauf (siehst du als vorherige messages) und ggf. gmail_search_messages, um die nötigen Details zu holen.
@@ -48,6 +49,46 @@ Max 5 Sätze in der finalen Antwort, außer die Antwort braucht eine Liste.`
 
 const MAX_DOCS_IN_CONTEXT = 30
 const MAX_SUMMARY_CHARS = 400
+
+/**
+ * Some senders flood the inbox with near-identical subjects (production
+ * monitoring alerts, daily-digest mails). Without collapsing, the most-recent
+ * 30 docs become 30 worker-stall alerts and everything else is invisible.
+ * We collapse by subject-prefix into one representative + "+N more".
+ */
+function dedupNoisyDocs<
+  D extends { receivedAt: Date; originalSubject: string | null },
+>(docs: D[]): Array<D & { _dupCount: number }> {
+  const stripped = (s: string | null): string =>
+    (s ?? '')
+      .replace(/^(Re|AW|Fwd|WG):\s*/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80)
+      .toLowerCase()
+
+  const groups = new Map<string, D[]>()
+  for (const d of docs) {
+    const key = stripped(d.originalSubject)
+    if (!key) {
+      groups.set(`__nokey__${d.receivedAt.toISOString()}`, [d])
+      continue
+    }
+    const arr = groups.get(key) ?? []
+    arr.push(d)
+    groups.set(key, arr)
+  }
+
+  const out: Array<D & { _dupCount: number }> = []
+  for (const arr of groups.values()) {
+    const newest = arr.reduce((a, b) =>
+      a.receivedAt > b.receivedAt ? a : b,
+    )
+    out.push({ ...newest, _dupCount: arr.length - 1 })
+  }
+  out.sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())
+  return out
+}
 
 function formatBerlinTime(d: Date): string {
   return d.toLocaleString('de-DE', {
@@ -70,7 +111,7 @@ async function buildLifeStateBlock(): Promise<string> {
         .select()
         .from(documents)
         .orderBy(desc(documents.receivedAt))
-        .limit(MAX_DOCS_IN_CONTEXT),
+        .limit(MAX_DOCS_IN_CONTEXT * 6),
       db.select().from(persons),
     ])
 
@@ -104,15 +145,24 @@ async function buildLifeStateBlock(): Promise<string> {
       )
       .join('\n') || '(keine pending)'
 
+  const deduped = dedupNoisyDocs(recentDocs).slice(0, MAX_DOCS_IN_CONTEXT)
+  const droppedCount = recentDocs.length - deduped.length
+  const droppedHint =
+    droppedCount > 0
+      ? `\n(zusätzlich ${droppedCount} weitere Mails im 4-Tages-Fenster — bei spezifischen Fragen gmail_search_messages nutzen.)`
+      : ''
+
   const docsBlock =
-    recentDocs
+    deduped
       .map((d) => {
         const date = d.receivedAt.toISOString().slice(0, 10)
         const summary =
           (d.summary ?? '').length > MAX_SUMMARY_CHARS
             ? (d.summary ?? '').slice(0, MAX_SUMMARY_CHARS) + '...'
             : (d.summary ?? '')
-        return `- ${date} | doc_id: ${d.id.slice(0, 8)} | topic: ${d.topicId ?? '?'} | ${summary}`
+        const dupSuffix =
+          d._dupCount > 0 ? ` (+${d._dupCount} weitere ähnliche)` : ''
+        return `- ${date} | doc_id: ${d.id.slice(0, 8)} | topic: ${d.topicId ?? '?'} | ${summary}${dupSuffix}`
       })
       .join('\n') || '(keine Documents)'
 
@@ -125,8 +175,8 @@ ${topicsBlock}
 PENDING-USER TASKS (task_id ist UUID, brauchst du für lifestate_task_* Tools):
 ${tasksBlock}
 
-LETZTE ${MAX_DOCS_IN_CONTEXT} DOCUMENTS:
-${docsBlock}`
+LETZTE DOCUMENTS (top ${MAX_DOCS_IN_CONTEXT}, ähnliche zusammengefasst):
+${docsBlock}${droppedHint}`
 }
 
 export async function answerQuery(
