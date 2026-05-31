@@ -1,5 +1,5 @@
 import type { Bot } from 'grammy'
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { db } from '../integrations/postgres/db.js'
 import {
   documents,
@@ -8,6 +8,7 @@ import {
 } from '../integrations/postgres/schema.js'
 import { answerQuery } from './query.js'
 import { draftReply } from './drafter.js'
+import { ingestMessage } from './ingestion.js'
 import { notifyDraft } from '../lib/notifier.js'
 import { resetConversation } from '../lib/conversation-store.js'
 import {
@@ -131,6 +132,26 @@ export function registerTelegramHandlers(
       .map((t, i) => `${i + 1}. ${t.name} (priority: ${t.priority})`)
       .join('\n')
     await ctx.reply(`Offene Topics (${openTopics.length}):\n\n${list}`)
+  })
+
+  bot.command('reingest', async (ctx) => {
+    const arg = ctx.match?.trim()
+    if (!arg) {
+      await ctx.reply(
+        'Usage: /reingest <gmail_message_id>\n\nLöscht das alte Document + pending Tasks und re-klassifiziert die Mail mit dem aktuellen Classifier. Nutze das, wenn der Classifier eine Mail falsch eingeordnet hat.',
+      )
+      return
+    }
+    await ctx.api.sendChatAction(ctx.chat.id, 'typing')
+    try {
+      const summary = await handleReingest(arg)
+      await ctx.reply(summary)
+    } catch (err) {
+      logger.error({ err, messageId: arg }, 're-ingest failed')
+      await ctx.reply(
+        `⚠️ Re-ingest fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   })
 
   bot.callbackQuery(/^approve:(.+)$/, async (ctx) => {
@@ -355,6 +376,61 @@ async function handleApprove(taskId: string): Promise<void> {
     { taskId, sentMessageId: sentId, to: parsed.from.email },
     'reply sent',
   )
+}
+
+async function handleReingest(messageId: string): Promise<string> {
+  // 1. Delete existing document + pending tasks for this message
+  const existing = await db
+    .select({ id: documents.id })
+    .from(documents)
+    .where(
+      and(eq(documents.source, 'gmail'), eq(documents.sourceId, messageId)),
+    )
+
+  let deletedTasks = 0
+  for (const doc of existing) {
+    const dt = await db
+      .delete(tasks)
+      .where(
+        and(
+          eq(tasks.relatedDocumentId, doc.id),
+          eq(tasks.status, 'pending_user'),
+        ),
+      )
+      .returning({ id: tasks.id })
+    deletedTasks += dt.length
+    await db.delete(documents).where(eq(documents.id, doc.id))
+  }
+
+  // 2. Fetch + parse + re-ingest with current code
+  const gmail = makeGmailClient()
+  const raw = await fetchMessage(gmail, messageId)
+  const parsed = parseMessage(raw)
+  const result = await ingestMessage(parsed)
+
+  const lines: string[] = []
+  lines.push(`🔄 Re-ingest "${parsed.subject}"`)
+  lines.push(
+    `Aufgeräumt: ${existing.length} Document(s), ${deletedTasks} pending Task(s).`,
+  )
+  lines.push(`Status: ${result.status}`)
+  if (result.status === 'ingested' && result.classification) {
+    const c = result.classification
+    lines.push(
+      `Classifier: intent=${c.intent}, doc_type=${c.doc_type ?? '—'}, action=${c.suggested_action}` +
+        (c.suggested_forward_to ? ` → ${c.suggested_forward_to}` : ''),
+    )
+    if (result.taskCreated) {
+      lines.push('✅ Task erzeugt — die Karte kommt gleich.')
+    } else {
+      lines.push(
+        'ℹ️ Kein Task erzeugt (kein Forward-Match, kein action_required).',
+      )
+    }
+  } else if (result.status === 'failed') {
+    lines.push(`Fehler: ${result.error}`)
+  }
+  return lines.join('\n')
 }
 
 async function handleCalendarCreate(taskId: string): Promise<string> {
