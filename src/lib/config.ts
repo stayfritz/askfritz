@@ -52,9 +52,20 @@ const policySchema = z.object({
   allow_auto: z.array(z.string()).default([]),
 })
 
+const forwardingRuleSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  doc_type: z.string(),
+  forward_to: z.string().email(),
+  requires_approval: z.boolean().default(true),
+})
+
 const policiesSchema = z.object({
   policies: z.record(z.string(), policySchema),
+  forwarding_rules: z.array(forwardingRuleSchema).default([]),
 })
+
+export type ForwardingRule = z.infer<typeof forwardingRuleSchema>
 
 const routingSchema = z.object({
   inbound: z.object({
@@ -68,11 +79,11 @@ const routingSchema = z.object({
   }),
 })
 
-function loadYaml<T>(name: string, schema: z.ZodType<T>): T {
+function loadYaml<S extends z.ZodTypeAny>(name: string, schema: S): z.infer<S> {
   const path = resolve(CONFIG_DIR, name)
   const content = readFileSync(path, 'utf-8')
   const parsed = parse(content)
-  return schema.parse(parsed)
+  return schema.parse(parsed) as z.infer<S>
 }
 
 export const config = {

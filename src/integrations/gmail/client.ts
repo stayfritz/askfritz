@@ -250,3 +250,111 @@ export async function downloadAttachment(
   })
   return Buffer.from(data.data ?? '', 'base64url')
 }
+
+export interface ForwardAttachment {
+  filename: string
+  mimeType: string
+  data: Buffer
+}
+
+export interface ForwardParams {
+  to: string
+  /** Forwarded subject (without "Fwd:" prefix — added if missing). */
+  subject: string
+  /** Optional cover note from the user, prepended above the original. */
+  coverNote?: string
+  original: {
+    from: string
+    date: Date
+    subject: string
+    to: string[]
+    bodyText: string
+  }
+  attachments: ForwardAttachment[]
+}
+
+function makeBoundary(): string {
+  return (
+    '----=_askfritz_' +
+    Buffer.from(
+      String(process.pid) + String(process.uptime()) + Math.floor(performance.now()),
+    )
+      .toString('base64url')
+      .slice(0, 24)
+  )
+}
+
+function formatRfc2822Date(d: Date): string {
+  return d.toUTCString().replace('GMT', '+0000')
+}
+
+function buildForwardMime(params: ForwardParams): string {
+  const boundary = makeBoundary()
+  const subject = params.subject.match(/^(fwd|fw):/i)
+    ? params.subject
+    : `Fwd: ${params.subject}`
+
+  const quotedOriginal =
+    '---------- Forwarded message ----------\r\n' +
+    `From: ${params.original.from}\r\n` +
+    `Date: ${formatRfc2822Date(params.original.date)}\r\n` +
+    `Subject: ${params.original.subject}\r\n` +
+    `To: ${params.original.to.join(', ')}\r\n` +
+    '\r\n' +
+    params.original.bodyText
+
+  const textBody =
+    (params.coverNote && params.coverNote.trim().length > 0
+      ? params.coverNote.trim() + '\r\n\r\n'
+      : '') + quotedOriginal
+
+  const headers = [
+    `To: ${params.to}`,
+    `Subject: ${encodeHeaderValue(subject)}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  ].join('\r\n')
+
+  const parts: string[] = []
+
+  // Cover note + quoted original as the body part
+  parts.push(
+    `--${boundary}\r\n` +
+      'Content-Type: text/plain; charset=UTF-8\r\n' +
+      'Content-Transfer-Encoding: base64\r\n' +
+      '\r\n' +
+      Buffer.from(textBody, 'utf-8').toString('base64').replace(/(.{76})/g, '$1\r\n'),
+  )
+
+  for (const att of params.attachments) {
+    const safeName = att.filename.replace(/"/g, "'")
+    parts.push(
+      `--${boundary}\r\n` +
+        `Content-Type: ${att.mimeType}; name="${safeName}"\r\n` +
+        'Content-Transfer-Encoding: base64\r\n' +
+        `Content-Disposition: attachment; filename="${safeName}"\r\n` +
+        '\r\n' +
+        att.data.toString('base64').replace(/(.{76})/g, '$1\r\n'),
+    )
+  }
+
+  const raw =
+    headers +
+    '\r\n\r\n' +
+    parts.join('\r\n') +
+    `\r\n--${boundary}--\r\n`
+
+  return Buffer.from(raw, 'utf-8').toString('base64url')
+}
+
+export async function forwardMessage(
+  gmail: gmail_v1.Gmail,
+  params: ForwardParams,
+): Promise<string> {
+  const raw = buildForwardMime(params)
+  const result = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw },
+  })
+  return result.data.id ?? ''
+}

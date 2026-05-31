@@ -43,6 +43,8 @@ export const taskStatus = pgEnum('task_status', [
   'cancelled',
 ])
 
+export const taskKind = pgEnum('task_kind', ['reply', 'forward'])
+
 export const threadStatus = pgEnum('thread_status', [
   'open',
   'waiting_user',
@@ -177,6 +179,8 @@ export const tasks = pgTable(
       onDelete: 'set null',
     }),
     relatedDocumentId: uuid('related_document_id'),
+    kind: taskKind('kind').notNull().default('reply'),
+    forwardTo: text('forward_to'),
     description: text('description').notNull(),
     status: taskStatus('status').notNull().default('pending_user'),
     draftContent: text('draft_content'),

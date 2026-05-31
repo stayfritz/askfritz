@@ -77,6 +77,70 @@ export async function notifyDraft(
   }
 }
 
+export interface ForwardNotification {
+  taskId: string
+  fromName?: string | undefined
+  fromEmail: string
+  subject: string
+  summary: string
+  forwardTo: string
+  ruleName: string
+  coverNote: string
+  attachments: string[]
+  urgency: 'low' | 'med' | 'high'
+}
+
+export async function notifyForward(input: ForwardNotification): Promise<void> {
+  if (!registeredBot || registeredUserId === null) {
+    logger.debug('notifier not registered, skipping forward notification')
+    return
+  }
+
+  const senderLabel = input.fromName
+    ? `${input.fromName} <${input.fromEmail}>`
+    : input.fromEmail
+  const urgencyIcon =
+    input.urgency === 'high' ? '🔴' : input.urgency === 'med' ? '🟡' : '⚪'
+  const attLine =
+    input.attachments.length === 0
+      ? '(keine)'
+      : input.attachments.map((f) => `• ${f}`).join('\n')
+
+  const text =
+    `${urgencyIcon} *Weiterleitung vorgeschlagen* (${input.ruleName})\n\n` +
+    `*Von:*       ${senderLabel}\n` +
+    `*Betreff:*   ${input.subject}\n` +
+    `*An:*        ${input.forwardTo}\n\n` +
+    `*Worum es geht:*\n${truncate(input.summary, 500)}\n\n` +
+    `*Anhänge:*\n${attLine}\n\n` +
+    `*Begleittext:*\n\`\`\`\n${truncate(input.coverNote, 800)}\n\`\`\``
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Weiterleiten', `forward:${input.taskId}`)
+    .text('✏️ Empfänger ändern', `fwd_edit:${input.taskId}`)
+    .text('🗑 Verwerfen', `discard:${input.taskId}`)
+
+  try {
+    await registeredBot.api.sendMessage(registeredUserId, text, {
+      reply_markup: keyboard,
+      parse_mode: 'Markdown',
+    })
+  } catch (err) {
+    logger.warn({ err }, 'markdown send failed, retrying as plain text')
+    const plainText =
+      `${urgencyIcon} Weiterleitung vorgeschlagen (${input.ruleName})\n\n` +
+      `Von: ${senderLabel}\n` +
+      `Betreff: ${input.subject}\n` +
+      `An: ${input.forwardTo}\n\n` +
+      `Worum es geht:\n${truncate(input.summary, 500)}\n\n` +
+      `Anhänge:\n${attLine}\n\n` +
+      `Begleittext:\n${truncate(input.coverNote, 800)}`
+    await registeredBot.api.sendMessage(registeredUserId, plainText, {
+      reply_markup: keyboard,
+    })
+  }
+}
+
 export async function notifyText(message: string): Promise<void> {
   if (!registeredBot || registeredUserId === null) return
   await registeredBot.api.sendMessage(registeredUserId, message)

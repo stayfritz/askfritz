@@ -28,3 +28,17 @@ policies:
       - send_message
       - schedule_meeting
       - mark_topic_done
+
+# Forwarding-Regeln. Classifier benutzt diese als Ziel-Tabelle für
+# `suggested_forward_to`. Validierung in ingestion: nur Ziele aus dieser Liste
+# werden akzeptiert.
+forwarding_rules:
+  - name: invoices
+    description: >
+      Rechnungen, Quittungen, Belege — alles mit Buchhaltungs-Charakter.
+      Typisch: PDF-Anhang + Subject enthält "invoice/receipt/rechnung/quittung",
+      oder Absender ist ein Billing-System (Anthropic, Stripe, AWS, Coolify,
+      Hetzner, Google Workspace, Vercel, ...).
+    doc_type: invoice
+    forward_to: rechnung@stayfritz.com
+    requires_approval: true

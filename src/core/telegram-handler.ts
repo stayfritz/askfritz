@@ -11,7 +11,9 @@ import { draftReply } from './drafter.js'
 import { notifyDraft } from '../lib/notifier.js'
 import { resetConversation } from '../lib/conversation-store.js'
 import {
+  downloadAttachment,
   fetchMessage,
+  forwardMessage,
   makeGmailClient,
   parseMessage,
   sendReply,
@@ -23,6 +25,9 @@ import { logger } from '../lib/logger.js'
  * Keyed by Telegram user id. Lost on restart (acceptable for v0).
  */
 const pendingEdits = new Map<number, string>()
+
+/** Forward-task awaiting a new recipient address from the user. */
+const pendingRecipientEdits = new Map<number, string>()
 
 export function registerTelegramHandlers(
   bot: Bot,
@@ -157,6 +162,39 @@ export function registerTelegramHandlers(
     )
   })
 
+  bot.callbackQuery(/^forward:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    try {
+      const target = await handleForward(taskId)
+      await ctx.answerCallbackQuery('Weitergeleitet ✅')
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+      await ctx.reply(`Mail an ${target} weitergeleitet, Task auf done.`)
+    } catch (err) {
+      logger.error({ err, taskId }, 'forward failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(
+        `⚠️ Weiterleiten fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  })
+
+  bot.callbackQuery(/^fwd_edit:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    pendingRecipientEdits.set(ctx.from!.id, taskId)
+    await ctx.answerCallbackQuery()
+    await ctx.reply(
+      'An welche Adresse soll ich weiterleiten? Schick mir die Email-Adresse in einer Nachricht.',
+    )
+  })
+
   bot.callbackQuery(/^discard:(.+)$/, async (ctx) => {
     const taskId = ctx.match[1]
     if (!taskId) {
@@ -175,6 +213,23 @@ export function registerTelegramHandlers(
   bot.on('message:text', async (ctx) => {
     const text = ctx.message.text
     if (text.startsWith('/')) return
+
+    // Are we waiting for a new forward recipient from this user?
+    const recipientTaskId = pendingRecipientEdits.get(ctx.from!.id)
+    if (recipientTaskId) {
+      pendingRecipientEdits.delete(ctx.from!.id)
+      const newAddr = text.trim()
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newAddr)) {
+        await ctx.reply('Das sieht nicht nach einer gültigen Email-Adresse aus. Versuch nochmal über den Button.')
+        return
+      }
+      await db
+        .update(tasks)
+        .set({ forwardTo: newAddr, updatedAt: new Date() })
+        .where(eq(tasks.id, recipientTaskId))
+      await ctx.reply(`OK, Empfänger geändert auf ${newAddr}. Nutze den ✅-Button in der ursprünglichen Nachricht zum Senden, oder /status für die Übersicht.`)
+      return
+    }
 
     // Are we waiting for edit instructions from this user?
     const editingTaskId = pendingEdits.get(ctx.from!.id)
@@ -264,6 +319,69 @@ async function handleApprove(taskId: string): Promise<void> {
     { taskId, sentMessageId: sentId, to: parsed.from.email },
     'reply sent',
   )
+}
+
+async function handleForward(taskId: string): Promise<string> {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+  if (!task) throw new Error('task not found')
+  if (task.kind !== 'forward') throw new Error('task is not a forward')
+  if (!task.forwardTo) throw new Error('task has no forward_to recipient')
+  if (!task.relatedDocumentId)
+    throw new Error('no related document — cannot forward')
+
+  const [doc] = await db
+    .select()
+    .from(documents)
+    .where(eq(documents.id, task.relatedDocumentId))
+    .limit(1)
+  if (!doc) throw new Error('related document not found')
+  if (doc.source !== 'gmail' || !doc.sourceId)
+    throw new Error('document is not a gmail message')
+
+  const gmail = makeGmailClient()
+  const raw = await fetchMessage(gmail, doc.sourceId)
+  const parsed = parseMessage(raw)
+
+  const attachments: Array<{
+    filename: string
+    mimeType: string
+    data: Buffer
+  }> = []
+  for (const att of parsed.attachments) {
+    const buf = await downloadAttachment(gmail, doc.sourceId, att.attachmentId)
+    attachments.push({ filename: att.filename, mimeType: att.mimeType, data: buf })
+  }
+
+  const sentId = await forwardMessage(gmail, {
+    to: task.forwardTo,
+    subject: parsed.subject,
+    coverNote: task.draftContent ?? undefined,
+    original: {
+      from: parsed.from.name
+        ? `${parsed.from.name} <${parsed.from.email}>`
+        : parsed.from.email,
+      date: parsed.receivedAt,
+      subject: parsed.subject,
+      to: parsed.to,
+      bodyText: parsed.bodyText,
+    },
+    attachments,
+  })
+
+  await db
+    .update(tasks)
+    .set({ status: 'done', updatedAt: new Date() })
+    .where(eq(tasks.id, taskId))
+
+  logger.info(
+    { taskId, sentMessageId: sentId, to: task.forwardTo, attachments: attachments.length },
+    'forwarded',
+  )
+  return task.forwardTo
 }
 
 async function handleEditWithInstructions(

@@ -18,7 +18,8 @@ import {
 import { classify, type Classification } from './classifier.js'
 import { draftReply } from './drafter.js'
 import { logger } from '../lib/logger.js'
-import { notifyDraft } from '../lib/notifier.js'
+import { notifyDraft, notifyForward } from '../lib/notifier.js'
+import { config, type ForwardingRule } from '../lib/config.js'
 
 export interface IngestionResult {
   messageId: string
@@ -112,7 +113,40 @@ export async function ingestMessage(
       .returning({ id: documents.id })
 
     let taskCreated = false
-    if (classification.intent === 'action_required' && doc?.id) {
+    const forwardRule = matchForwardingRule(classification)
+
+    if (forwardRule && doc?.id) {
+      const coverNote = buildForwardCoverNote(parsed, classification)
+      const [task] = await db
+        .insert(tasks)
+        .values({
+          topicId,
+          relatedDocumentId: doc.id,
+          kind: 'forward',
+          forwardTo: forwardRule.forward_to,
+          description: `Forward (${forwardRule.name}) → ${forwardRule.forward_to}: ${classification.summary}`,
+          status: 'pending_user',
+          requiresDecision: forwardRule.requires_approval,
+          draftContent: coverNote,
+        })
+        .returning({ id: tasks.id })
+      taskCreated = true
+
+      if (task?.id) {
+        await notifyForward({
+          taskId: task.id,
+          fromName: parsed.from.name,
+          fromEmail: parsed.from.email,
+          subject: parsed.subject,
+          summary: classification.summary,
+          forwardTo: forwardRule.forward_to,
+          ruleName: forwardRule.name,
+          coverNote,
+          attachments: parsed.attachments.map((a) => a.filename),
+          urgency: classification.urgency,
+        })
+      }
+    } else if (classification.intent === 'action_required' && doc?.id) {
       let draft: string | null = null
       try {
         draft = await draftReply({
@@ -131,6 +165,7 @@ export async function ingestMessage(
         .values({
           topicId,
           relatedDocumentId: doc.id,
+          kind: 'reply',
           description: classification.summary,
           status: 'pending_user',
           requiresDecision: true,
@@ -249,6 +284,48 @@ async function uploadAttachments(
   }
 
   return paths
+}
+
+/**
+ * Match the classifier's suggestion against the configured forwarding_rules.
+ * The LLM's `suggested_forward_to` is validated against the rule's target so a
+ * hallucinated address can't leak out — the rule is the source of truth.
+ */
+function matchForwardingRule(c: Classification): ForwardingRule | null {
+  if (c.suggested_action !== 'forward' || !c.doc_type) return null
+  const rule = config.policies.forwarding_rules.find(
+    (r) => r.doc_type === c.doc_type,
+  )
+  if (!rule) return null
+  if (
+    c.suggested_forward_to &&
+    c.suggested_forward_to.toLowerCase() !== rule.forward_to.toLowerCase()
+  ) {
+    logger.warn(
+      {
+        suggested: c.suggested_forward_to,
+        policy: rule.forward_to,
+        doc_type: c.doc_type,
+      },
+      'classifier suggested forward_to does not match policy — using policy target',
+    )
+  }
+  return rule
+}
+
+function buildForwardCoverNote(
+  parsed: ParsedMessage,
+  c: Classification,
+): string {
+  const senderLabel = parsed.from.name
+    ? `${parsed.from.name} <${parsed.from.email}>`
+    : parsed.from.email
+  return (
+    `FYI — automatisch weitergeleitet von Fritz.\n\n` +
+    `Absender: ${senderLabel}\n` +
+    `Betreff:  ${parsed.subject}\n` +
+    `Kurz:     ${c.summary}\n`
+  )
 }
 
 async function upsertThread(input: {

@@ -17,6 +17,20 @@ const classificationSchema = z.object({
   urgency: z.enum(['low', 'med', 'high']),
   language: z.string(),
   summary: z.string(),
+  doc_type: z
+    .enum([
+      'invoice',
+      'receipt',
+      'contract',
+      'statement',
+      'newsletter',
+      'personal',
+      'notification',
+      'other',
+    ])
+    .nullable(),
+  suggested_action: z.enum(['reply', 'forward', 'none']),
+  suggested_forward_to: z.string().nullable(),
 })
 
 export type Classification = z.infer<typeof classificationSchema>
@@ -36,15 +50,29 @@ function buildSystemPrompt(): string {
     })
     .join('\n')
 
+  const forwardingRules =
+    config.policies.forwarding_rules.length === 0
+      ? '(none configured)'
+      : config.policies.forwarding_rules
+          .map(
+            (r) =>
+              `- doc_type=${r.doc_type} → forward_to=${r.forward_to}` +
+              (r.description ? `\n  trigger: ${r.description.replace(/\s+/g, ' ').trim()}` : ''),
+          )
+          .join('\n')
+
   return `You are an email-triage classifier for askfritz, a personal AI chief-of-staff for Thomas Langenberg.
 
-Your job: classify each inbound email into a known life-domain, suggest a topic, match the sender if possible, and assess intent/urgency. Output strict JSON only.
+Your job: classify each inbound email into a known life-domain, suggest a topic, match the sender if possible, assess intent/urgency, and decide whether the mail should be replied to, forwarded to a routing inbox, or left alone. Output strict JSON only.
 
 KNOWN DOMAINS:
 ${knownDomains}
 
 KNOWN PERSONS (sender candidates):
 ${knownPersons}
+
+FORWARDING ROUTES (doc_type → target inbox):
+${forwardingRules}
 
 RULES:
 - domain_id: pick the matching domain id, or null if uncertain. When null, the email is flagged for human review.
@@ -54,6 +82,21 @@ RULES:
 - urgency: "high" (time-critical or money/legal/health), "med" (normal), "low" (can wait).
 - language: ISO 639-1 code of the email body (de, en, es).
 - summary: 1-2 sentence German summary of what the email is about and what (if anything) is expected from Thomas.
+- doc_type: classify the document character.
+    * "invoice"     — Rechnung/Quittung/Receipt, typically with PDF attachment from a vendor billing system (Anthropic, Stripe, AWS, Hetzner, Coolify, Vercel, Google Workspace, …) or subject containing "invoice/receipt/rechnung/quittung/beleg".
+    * "receipt"     — Zahlungsbestätigung ohne separaten Rechnungs-Anhang (z.B. "Your payment was successful").
+    * "contract"    — Vertragsdokument, AGB-Update, Kündigung.
+    * "statement"   — Kontoauszug, Reporting.
+    * "newsletter"  — Marketing/Newsletter.
+    * "personal"    — private Mail von Bekannten/Familie.
+    * "notification"— System-Notification ohne Aktion (Deployment-OK, GitHub PR-Notice, …).
+    * "other"       — alles andere.
+    * null wenn unklar.
+- suggested_action:
+    * "forward"  — falls doc_type zu einer FORWARDING ROUTE oben passt. NUR Targets aus der Liste oben verwenden. Niemals erfundene Adressen.
+    * "reply"    — falls intent == "action_required" und KEINE Forward-Route greift.
+    * "none"     — falls FYI/notification ohne nötige Aktion, oder unklar.
+- suggested_forward_to: bei "forward" die EXAKTE Target-Email aus der Liste oben. Sonst null.
 
 OUTPUT: a single JSON object, no markdown fences, no prose.
 
@@ -65,7 +108,10 @@ Schema:
   "intent": "query" | "fyi" | "action_required" | "unknown",
   "urgency": "low" | "med" | "high",
   "language": string,
-  "summary": string
+  "summary": string,
+  "doc_type": "invoice" | "receipt" | "contract" | "statement" | "newsletter" | "personal" | "notification" | "other" | null,
+  "suggested_action": "reply" | "forward" | "none",
+  "suggested_forward_to": string | null
 }`
 }
 
