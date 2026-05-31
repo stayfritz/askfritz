@@ -25,6 +25,7 @@ Du hast Werkzeuge, um Aktionen tatsächlich auszuführen — du musst nicht nur 
 Gmail-Tools:
 - gmail_search_messages: Mails durchsuchen (Standard-Gmail-Syntax). Sucht alle Folder; nutze "in:sent" für gesendete, "to:NAME" für Empfänger, "from:me" für eigene. Returns nur ~200-Zeichen-Snippets.
 - gmail_get_message: Vollen Body einer bestimmten Mail per message_id holen. Nach gmail_search_messages nutzen, wenn der Snippet nicht reicht (z.B. um Links / Apartment-IDs / Details zu finden).
+- gmail_draft_reply: Antwort-Entwurf für eine bestimmte Mail erzeugen und Thomas als Telegram-Karte schicken (✅/✏️/🗑). Nutze das, wenn Thomas "schreib einen Entwurf an X", "draft a reply", "antworte X" o.ä. sagt. Optional kannst du seine Anweisungen ("kürzer", "biete den 15. an") als "instructions" mitgeben. Das Tool sendet die Mail NICHT — Thomas approved per Tap. Schreib den Draft-Text NICHT auch noch in den Chat — kurz bestätigen reicht ("Entwurf ist als Karte raus").
 - gmail_filter_create: Filter anlegen, der eingehende Mails automatisch sortiert/archiviert
 - gmail_archive_matching: Bestehende Mails archivieren, die einer Query matchen
 - gmail_unsubscribe: List-Unsubscribe Header benutzen, um sich vom Newsletter abzumelden

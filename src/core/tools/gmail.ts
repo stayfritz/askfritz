@@ -1,10 +1,15 @@
 import { z } from 'zod'
+import { and, eq } from 'drizzle-orm'
 import type { Tool } from './types.js'
 import {
   fetchMessage,
   makeGmailClient,
   parseMessage,
 } from '../../integrations/gmail/client.js'
+import { db } from '../../integrations/postgres/db.js'
+import { documents, tasks } from '../../integrations/postgres/schema.js'
+import { draftReply } from '../drafter.js'
+import { notifyDraft } from '../../lib/notifier.js'
 import { logger } from '../../lib/logger.js'
 
 // ---------------------------------------------------------------------------
@@ -396,5 +401,155 @@ export const gmailUnsubscribe: Tool<
       ok: false,
       reason: 'List-Unsubscribe header found but no usable URL.',
     }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// gmail_draft_reply
+// ---------------------------------------------------------------------------
+
+const draftReplyInput = z.object({
+  message_id: z
+    .string()
+    .describe(
+      'Gmail message_id of the mail to reply to (from gmail_search_messages or gmail_get_message).',
+    ),
+  instructions: z
+    .string()
+    .optional()
+    .describe(
+      'Optional natural-language instructions for the draft. Examples: "kurz halten", "nach NIE-Nummer fragen", "Termin am 15. statt 17. vorschlagen". Leave empty for a neutral first draft.',
+    ),
+})
+
+export const gmailDraftReply: Tool<
+  z.infer<typeof draftReplyInput>,
+  {
+    ok: boolean
+    task_id?: string
+    reason?: string
+  }
+> = {
+  name: 'gmail_draft_reply',
+  description:
+    'Generate a reply draft for a Gmail message and send it to Thomas as a Telegram approval card (✅ Senden / ✏️ Bearbeiten / 🗑 Verwerfen). The draft is NOT sent automatically — Thomas approves it with one tap. Use after the user asks to write/draft a reply ("schreib einen Entwurf", "draft a reply"). Do NOT also paste the draft text into your chat response — just briefly confirm ("Draft ist im Chat als Karte"). The mail does not need to have been auto-ingested before; if no document exists yet, this tool creates a minimal record.',
+  inputSchema: draftReplyInput,
+  execute: async (input) => {
+    const gmail = makeGmailClient()
+    const raw = await fetchMessage(gmail, input.message_id)
+    const parsed = parseMessage(raw)
+
+    // Find existing document, or create a minimal record so the task can link.
+    const existingDocs = await db
+      .select()
+      .from(documents)
+      .where(
+        and(
+          eq(documents.source, 'gmail'),
+          eq(documents.sourceId, input.message_id),
+        ),
+      )
+      .limit(1)
+
+    let docId: string
+    let language = 'de'
+    let summary = parsed.subject
+    let urgency: 'low' | 'med' | 'high' = 'med'
+
+    if (existingDocs[0]) {
+      const doc = existingDocs[0]
+      docId = doc.id
+      const meta = (doc.metadata as Record<string, unknown>) ?? {}
+      if (typeof meta.language === 'string') language = meta.language
+      if (doc.summary) summary = doc.summary
+      const urgencyRaw = meta.urgency
+      if (urgencyRaw === 'high' || urgencyRaw === 'low' || urgencyRaw === 'med') {
+        urgency = urgencyRaw
+      }
+    } else {
+      const [inserted] = await db
+        .insert(documents)
+        .values({
+          source: 'gmail',
+          sourceId: input.message_id,
+          receivedAt: parsed.receivedAt,
+          summary: parsed.subject,
+          originalSubject: parsed.subject,
+          metadata: {
+            from_email: parsed.from.email,
+            from_name: parsed.from.name ?? null,
+            thread_id: parsed.threadId,
+            intent: 'action_required',
+            urgency: 'med',
+            language: 'de',
+            via: 'gmail_draft_reply_tool',
+          },
+        })
+        .returning({ id: documents.id })
+      if (!inserted) return { ok: false, reason: 'document insert failed' }
+      docId = inserted.id
+    }
+
+    const draft = await draftReply({
+      originalFrom: parsed.from,
+      originalSubject: parsed.subject,
+      originalBody: parsed.bodyText,
+      language,
+      summary,
+      ...(input.instructions ? { editInstructions: input.instructions } : {}),
+    })
+
+    // Reuse an open reply task for this document if one already exists.
+    const existingTasks = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.relatedDocumentId, docId),
+          eq(tasks.kind, 'reply'),
+          eq(tasks.status, 'pending_user'),
+        ),
+      )
+      .limit(1)
+
+    let taskId: string
+    if (existingTasks[0]) {
+      taskId = existingTasks[0].id
+      await db
+        .update(tasks)
+        .set({ draftContent: draft, updatedAt: new Date() })
+        .where(eq(tasks.id, taskId))
+    } else {
+      const [t] = await db
+        .insert(tasks)
+        .values({
+          relatedDocumentId: docId,
+          kind: 'reply',
+          description: summary,
+          status: 'pending_user',
+          requiresDecision: true,
+          draftContent: draft,
+        })
+        .returning({ id: tasks.id })
+      if (!t) return { ok: false, reason: 'task insert failed' }
+      taskId = t.id
+    }
+
+    await notifyDraft({
+      taskId,
+      fromName: parsed.from.name,
+      fromEmail: parsed.from.email,
+      subject: parsed.subject,
+      summary,
+      draftText: draft,
+      urgency,
+    })
+
+    logger.info(
+      { taskId, messageId: input.message_id, hadInstructions: !!input.instructions },
+      'on-demand draft created',
+    )
+
+    return { ok: true, task_id: taskId }
   },
 }

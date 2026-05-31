@@ -1,6 +1,7 @@
 import type { AnyTool } from './types.js'
 import {
   gmailArchiveMatching,
+  gmailDraftReply,
   gmailFilterCreate,
   gmailGetMessage,
   gmailSearchMessages,
@@ -15,6 +16,7 @@ import {
 export const allTools: AnyTool[] = [
   gmailSearchMessages,
   gmailGetMessage,
+  gmailDraftReply,
   gmailFilterCreate,
   gmailArchiveMatching,
   gmailUnsubscribe,
