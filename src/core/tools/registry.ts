@@ -12,6 +12,11 @@ import {
   lifestateTaskSnooze,
   lifestateTopicDone,
 } from './lifestate.js'
+import {
+  calendarFindFreeSlot,
+  calendarListEvents,
+  calendarProposeEvent,
+} from './calendar.js'
 
 export const allTools: AnyTool[] = [
   gmailSearchMessages,
@@ -20,6 +25,9 @@ export const allTools: AnyTool[] = [
   gmailFilterCreate,
   gmailArchiveMatching,
   gmailUnsubscribe,
+  calendarListEvents,
+  calendarFindFreeSlot,
+  calendarProposeEvent,
   lifestateTaskDone,
   lifestateTaskSnooze,
   lifestateTopicDone,

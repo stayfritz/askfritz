@@ -43,7 +43,11 @@ export const taskStatus = pgEnum('task_status', [
   'cancelled',
 ])
 
-export const taskKind = pgEnum('task_kind', ['reply', 'forward'])
+export const taskKind = pgEnum('task_kind', [
+  'reply',
+  'forward',
+  'calendar_event',
+])
 
 export const threadStatus = pgEnum('thread_status', [
   'open',
@@ -181,6 +185,16 @@ export const tasks = pgTable(
     relatedDocumentId: uuid('related_document_id'),
     kind: taskKind('kind').notNull().default('reply'),
     forwardTo: text('forward_to'),
+    calendarPayload: jsonb('calendar_payload').$type<{
+      summary: string
+      description?: string
+      start_iso: string
+      end_iso: string
+      timezone: string
+      attendees?: string[]
+      location?: string
+      send_invites?: boolean
+    } | null>(),
     description: text('description').notNull(),
     status: taskStatus('status').notNull().default('pending_user'),
     draftContent: text('draft_content'),

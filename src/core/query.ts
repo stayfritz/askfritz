@@ -30,6 +30,11 @@ Gmail-Tools:
 - gmail_archive_matching: Bestehende Mails archivieren, die einer Query matchen
 - gmail_unsubscribe: List-Unsubscribe Header benutzen, um sich vom Newsletter abzumelden
 
+Kalender-Tools (Google Calendar, primary):
+- calendar_list_events: Termine zwischen time_min und time_max anzeigen. Read-only. Nutze bei Fragen wie "was steht morgen an" oder VOR calendar_propose_event um Konflikte zu sehen.
+- calendar_find_free_slot: Freie Slots zwischen time_min und time_max finden, die mind. duration_minutes lang sind. Read-only.
+- calendar_propose_event: Termin-Vorschlag als Telegram-Karte (✅/✏️/🗑) — wird NICHT direkt eingetragen. Default-Zeitzone Europe/Berlin. Bei Attendees: send_invites=false außer Thomas sagt explizit "Einladung verschicken". Beispiel-Aufruf: summary="Besprechung Anke", start_iso="2026-06-14T14:00:00+02:00", end_iso="2026-06-14T15:00:00+02:00". Schreib die Termin-Details NICHT zusätzlich in den Chat — kurz bestätigen ("Karte ist raus").
+
 Life-State-Tools:
 - lifestate_task_done: Task als erledigt markieren
 - lifestate_task_snooze: Task auf später schieben (mit ISO Datetime, Europe/Berlin)

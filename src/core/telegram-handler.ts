@@ -18,6 +18,10 @@ import {
   parseMessage,
   sendReply,
 } from '../integrations/gmail/client.js'
+import {
+  createEvent,
+  makeCalendarClient,
+} from '../integrations/calendar/client.js'
 import { logger } from '../lib/logger.js'
 
 /**
@@ -159,6 +163,38 @@ export function registerTelegramHandlers(
     await ctx.answerCallbackQuery()
     await ctx.reply(
       'Was soll ich ändern? Schreib mir deine Änderungswünsche in einer Nachricht — ich generiere den Entwurf neu.',
+    )
+  })
+
+  bot.callbackQuery(/^cal_create:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    try {
+      const summary = await handleCalendarCreate(taskId)
+      await ctx.answerCallbackQuery('Eingetragen ✅')
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+      await ctx.reply(`Termin "${summary}" ist im Kalender. Task auf done.`)
+    } catch (err) {
+      logger.error({ err, taskId }, 'calendar create failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(
+        `⚠️ Termin eintragen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  })
+
+  bot.callbackQuery(/^cal_edit:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    await ctx.answerCallbackQuery()
+    await ctx.reply(
+      'Was soll ich am Termin ändern? Schreib mir deine Anpassung als normale Nachricht — ich nutze sie als neue Anweisung an Fritz (z.B. "verschiebe auf 16 Uhr" oder "ohne Anke einladen").',
     )
   })
 
@@ -319,6 +355,42 @@ async function handleApprove(taskId: string): Promise<void> {
     { taskId, sentMessageId: sentId, to: parsed.from.email },
     'reply sent',
   )
+}
+
+async function handleCalendarCreate(taskId: string): Promise<string> {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+  if (!task) throw new Error('task not found')
+  if (task.kind !== 'calendar_event')
+    throw new Error('task is not a calendar event')
+  const payload = task.calendarPayload
+  if (!payload) throw new Error('no calendar_payload on task')
+
+  const cal = makeCalendarClient()
+  const event = await createEvent(cal, {
+    summary: payload.summary,
+    ...(payload.description ? { description: payload.description } : {}),
+    startIso: payload.start_iso,
+    endIso: payload.end_iso,
+    timezone: payload.timezone,
+    ...(payload.attendees ? { attendees: payload.attendees } : {}),
+    ...(payload.location ? { location: payload.location } : {}),
+    sendInvites: payload.send_invites ?? false,
+  })
+
+  await db
+    .update(tasks)
+    .set({ status: 'done', updatedAt: new Date() })
+    .where(eq(tasks.id, taskId))
+
+  logger.info(
+    { taskId, eventId: event.id, htmlLink: event.htmlLink },
+    'calendar event created',
+  )
+  return event.summary
 }
 
 async function handleForward(taskId: string): Promise<string> {

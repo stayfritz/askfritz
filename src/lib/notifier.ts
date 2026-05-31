@@ -141,6 +141,93 @@ export async function notifyForward(input: ForwardNotification): Promise<void> {
   }
 }
 
+export interface CalendarEventNotification {
+  taskId: string
+  summary: string
+  description?: string
+  startIso: string
+  endIso: string
+  timezone: string
+  attendees?: string[]
+  location?: string
+  sendInvites?: boolean
+}
+
+function formatLocal(iso: string, tz: string): string {
+  try {
+    return new Date(iso).toLocaleString('de-DE', {
+      timeZone: tz,
+      weekday: 'short',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return iso
+  }
+}
+
+export async function notifyCalendarEvent(
+  input: CalendarEventNotification,
+): Promise<void> {
+  if (!registeredBot || registeredUserId === null) {
+    logger.debug('notifier not registered, skipping calendar notification')
+    return
+  }
+
+  const start = formatLocal(input.startIso, input.timezone)
+  const end = formatLocal(input.endIso, input.timezone)
+  const attendeesLine =
+    input.attendees && input.attendees.length > 0
+      ? input.attendees.map((a) => `• ${a}`).join('\n')
+      : '(keine)'
+  const inviteHint = input.sendInvites
+    ? '📧 Attendees bekommen eine Einladungs-Mail.'
+    : '📭 Keine Einladungs-Mail (Termin nur in deinem Kalender).'
+
+  const text =
+    `🗓 *Termin-Vorschlag*\n\n` +
+    `*Titel:*  ${input.summary}\n` +
+    `*Start:*  ${start}\n` +
+    `*Ende:*   ${end}\n` +
+    (input.location ? `*Ort:*    ${input.location}\n` : '') +
+    `\n*Teilnehmer:*\n${attendeesLine}\n\n` +
+    (input.description
+      ? `*Beschreibung:*\n${truncate(input.description, 600)}\n\n`
+      : '') +
+    inviteHint
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Eintragen', `cal_create:${input.taskId}`)
+    .text('✏️ Ändern', `cal_edit:${input.taskId}`)
+    .text('🗑 Verwerfen', `discard:${input.taskId}`)
+
+  try {
+    await registeredBot.api.sendMessage(registeredUserId, text, {
+      reply_markup: keyboard,
+      parse_mode: 'Markdown',
+    })
+  } catch (err) {
+    logger.warn({ err }, 'markdown send failed, retrying as plain text')
+    const plainText =
+      `🗓 Termin-Vorschlag\n\n` +
+      `Titel: ${input.summary}\n` +
+      `Start: ${start}\n` +
+      `Ende:  ${end}\n` +
+      (input.location ? `Ort:   ${input.location}\n` : '') +
+      `\nTeilnehmer:\n${attendeesLine}\n\n` +
+      (input.description
+        ? `Beschreibung:\n${truncate(input.description, 600)}\n\n`
+        : '') +
+      inviteHint
+    await registeredBot.api.sendMessage(registeredUserId, plainText, {
+      reply_markup: keyboard,
+    })
+  }
+}
+
 export async function notifyText(message: string): Promise<void> {
   if (!registeredBot || registeredUserId === null) return
   await registeredBot.api.sendMessage(registeredUserId, message)
