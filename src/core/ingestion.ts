@@ -107,6 +107,9 @@ export async function ingestMessage(
           intent: classification.intent,
           urgency: classification.urgency,
           language: classification.language,
+          doc_type: classification.doc_type,
+          suggested_action: classification.suggested_action,
+          suggested_forward_to: classification.suggested_forward_to,
           attachments: dropboxPaths,
         },
       })

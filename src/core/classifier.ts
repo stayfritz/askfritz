@@ -82,20 +82,20 @@ RULES:
 - urgency: "high" (time-critical or money/legal/health), "med" (normal), "low" (can wait).
 - language: ISO 639-1 code of the email body (de, en, es).
 - summary: 1-2 sentence German summary of what the email is about and what (if anything) is expected from Thomas.
-- doc_type: classify the document character.
-    * "invoice"     — Rechnung/Quittung/Receipt, typically with PDF attachment from a vendor billing system (Anthropic, Stripe, AWS, Hetzner, Coolify, Vercel, Google Workspace, …) or subject containing "invoice/receipt/rechnung/quittung/beleg".
-    * "receipt"     — Zahlungsbestätigung ohne separaten Rechnungs-Anhang (z.B. "Your payment was successful").
+- doc_type: classify the document character. WICHTIG: doc_type ist UNABHÄNGIG von intent. Eine Rechnung von Anthropic ist doc_type=invoice, auch wenn keine Antwort nötig ist (intent=fyi). Setze doc_type nur dann auf null, wenn du wirklich keine der Kategorien zuordnen kannst.
+    * "invoice"     — Rechnung/Quittung/Receipt mit PDF-Anhang von einem Billing-System (Anthropic, Stripe, AWS, Hetzner, Coolify, Vercel, Google Workspace, OpenAI, …) ODER Subject enthält "invoice/receipt/rechnung/quittung/beleg/Your receipt from …". Hat fast immer eine Rechnungs-Nummer im Subject.
+    * "receipt"     — Zahlungsbestätigung ohne separaten Rechnungs-Anhang (z.B. "Your payment was successful", Stripe-Charge-Confirmation).
     * "contract"    — Vertragsdokument, AGB-Update, Kündigung.
     * "statement"   — Kontoauszug, Reporting.
     * "newsletter"  — Marketing/Newsletter.
     * "personal"    — private Mail von Bekannten/Familie.
     * "notification"— System-Notification ohne Aktion (Deployment-OK, GitHub PR-Notice, …).
     * "other"       — alles andere.
-    * null wenn unklar.
-- suggested_action:
-    * "forward"  — falls doc_type zu einer FORWARDING ROUTE oben passt. NUR Targets aus der Liste oben verwenden. Niemals erfundene Adressen.
-    * "reply"    — falls intent == "action_required" und KEINE Forward-Route greift.
-    * "none"     — falls FYI/notification ohne nötige Aktion, oder unklar.
+    * null nur wenn wirklich nichts passt.
+- suggested_action: WÄHLE IN DIESER REIHENFOLGE (forward hat absolute Priorität):
+    1. "forward" — IMMER wenn doc_type zu einer der FORWARDING ROUTES oben passt. Das gilt AUCH wenn intent=fyi oder notification. Eine Rechnung ist doc_type=invoice → suggested_action=forward, fertig. NUR Targets aus der Liste oben verwenden. Niemals erfundene Adressen.
+    2. "reply" — wenn keine Route greift UND intent="action_required".
+    3. "none" — sonst (echtes FYI ohne Routing, Newsletter, …).
 - suggested_forward_to: bei "forward" die EXAKTE Target-Email aus der Liste oben. Sonst null.
 
 OUTPUT: a single JSON object, no markdown fences, no prose.
