@@ -10,9 +10,9 @@
  *   2. In GCP Console → APIs & Services → OAuth consent screen, add scopes:
  *      - https://www.googleapis.com/auth/gmail.modify
  *      - https://www.googleapis.com/auth/gmail.send
- *      - https://www.googleapis.com/auth/calendar.events
- *      - https://www.googleapis.com/auth/calendar.readonly
- *      (gmail.modify + gmail.send cover everything Fritz already does)
+ *      - https://www.googleapis.com/auth/calendar
+ *      (gmail.modify + gmail.send cover everything Fritz already does;
+ *       calendar is the broad scope — events + freebusy + read.)
  *   3. Run:  pnpm exec tsx scripts/google-auth.ts
  *   4. Open the printed URL in your browser, approve, copy the `code=...`
  *      param from the redirect URL.
@@ -27,8 +27,12 @@ import { google } from 'googleapis'
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/calendar.readonly',
+  // gmail.modify deckt KEINE Filter-Operationen — die brauchen settings.basic.
+  // Damit kann Fritz gmail_filter_create / batchModify auf bestehende Mails
+  // ausführen ("Filter mir alle idealista weg, ältere auch").
+  'https://www.googleapis.com/auth/gmail.settings.basic',
+  // Broad Calendar scope — covers events.insert, events.list, freebusy.query.
+  'https://www.googleapis.com/auth/calendar',
 ]
 
 // Out-of-band flow: Google shows the code on a page after consent.
