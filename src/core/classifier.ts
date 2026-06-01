@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { ask } from '../integrations/llm/client.js'
 import { config } from '../lib/config.js'
+import { db } from '../integrations/postgres/db.js'
+import { persons } from '../integrations/postgres/schema.js'
 
 export interface ClassificationInput {
   from: { name?: string | undefined; email: string }
@@ -37,7 +39,7 @@ const classificationSchema = z.object({
 
 export type Classification = z.infer<typeof classificationSchema>
 
-function buildSystemPrompt(): string {
+async function buildSystemPrompt(): Promise<string> {
   const knownDomains = config.domains.domains
     .map(
       (d) =>
@@ -45,10 +47,13 @@ function buildSystemPrompt(): string {
     )
     .join('\n')
 
-  const knownPersons = config.persons.persons
+  // Load from DB so runtime-added persons (via Telegram /Anlegen-Button or
+  // lifestate_upsert_person tool) become visible to the classifier immediately.
+  const dbPersons = await db.select().from(persons)
+  const knownPersons = dbPersons
     .map((p) => {
       const emails = (p.emails ?? []).join(', ') || '(none)'
-      return `- id: ${p.id} | name: ${p.name} | domain: ${p.domain_id} | role: ${p.role ?? '?'} | emails: ${emails} | lang: ${p.language ?? '?'}`
+      return `- id: ${p.id} | name: ${p.name} | domain: ${p.domainId} | role: ${p.role ?? '?'} | emails: ${emails} | lang: ${p.language ?? '?'}`
     })
     .join('\n')
 
@@ -124,7 +129,7 @@ const MAX_BODY_CHARS = 4000
 export async function classify(
   input: ClassificationInput,
 ): Promise<Classification> {
-  const system = buildSystemPrompt()
+  const system = await buildSystemPrompt()
 
   const truncatedBody =
     input.bodyText.length > MAX_BODY_CHARS

@@ -1,11 +1,14 @@
 import type { Bot } from 'grammy'
 import { and, desc, eq } from 'drizzle-orm'
+import { InlineKeyboard } from 'grammy'
 import { db } from '../integrations/postgres/db.js'
 import {
   documents,
+  persons,
   tasks,
   topics,
 } from '../integrations/postgres/schema.js'
+import { config } from '../lib/config.js'
 import { answerQuery } from './query.js'
 import { draftReply } from './drafter.js'
 import { ingestMessage } from './ingestion.js'
@@ -34,6 +37,25 @@ const pendingEdits = new Map<number, string>()
 
 /** Forward-task awaiting a new recipient address from the user. */
 const pendingRecipientEdits = new Map<number, string>()
+
+/** In-flight person classification, keyed by Telegram user id. */
+interface PendingPersonClassify {
+  fromEmail: string
+  fromName: string | null
+  role?: string
+}
+const pendingPersonClassify = new Map<number, PendingPersonClassify>()
+
+const ROLE_CHOICES: Array<{ label: string; value: string }> = [
+  { label: 'Banker', value: 'banker' },
+  { label: 'Stb', value: 'tax_advisor' },
+  { label: 'Versicherung', value: 'insurance_admin' },
+  { label: 'Anwalt', value: 'lawyer' },
+  { label: 'Familie', value: 'family' },
+  { label: 'Freund', value: 'friend' },
+  { label: 'Geschäft', value: 'business' },
+  { label: 'Andere…', value: '__other__' },
+]
 
 export function registerTelegramHandlers(
   bot: Bot,
@@ -283,6 +305,103 @@ export function registerTelegramHandlers(
     await ctx.editMessageReplyMarkup({ reply_markup: undefined })
   })
 
+  bot.callbackQuery(/^person_add:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    try {
+      const sender = await getSenderForTask(taskId)
+      if (!sender) {
+        await ctx.answerCallbackQuery('Kein Sender gefunden')
+        return
+      }
+      pendingPersonClassify.set(ctx.from!.id, {
+        fromEmail: sender.email,
+        fromName: sender.name,
+      })
+      const kb = new InlineKeyboard()
+      // 2 per row
+      for (let i = 0; i < ROLE_CHOICES.length; i += 2) {
+        const a = ROLE_CHOICES[i]
+        const b = ROLE_CHOICES[i + 1]
+        if (a) kb.text(a.label, `pcls_role:${a.value}`)
+        if (b) kb.text(b.label, `pcls_role:${b.value}`)
+        kb.row()
+      }
+      await ctx.answerCallbackQuery()
+      await ctx.reply(
+        `Welche Rolle hat ${sender.name ?? sender.email}?`,
+        { reply_markup: kb },
+      )
+    } catch (err) {
+      logger.error({ err, taskId }, 'person_add failed')
+      await ctx.answerCallbackQuery('Fehler')
+    }
+  })
+
+  bot.callbackQuery(/^pcls_role:(.+)$/, async (ctx) => {
+    const role = ctx.match[1]
+    if (!role) {
+      await ctx.answerCallbackQuery('Rolle fehlt')
+      return
+    }
+    const pending = pendingPersonClassify.get(ctx.from!.id)
+    if (!pending) {
+      await ctx.answerCallbackQuery('Keine Auswahl in flight')
+      await ctx.reply(
+        'Hmm, ich weiß nicht mehr welchen Sender du klassifizieren wolltest. Tipp den `👤 Sender anlegen`-Button nochmal an.',
+      )
+      return
+    }
+    if (role === '__other__') {
+      await ctx.answerCallbackQuery()
+      await ctx.reply(
+        'OK — schreib mir die Rolle als kurze snake_case-Bezeichnung (z.B. "vermieter", "arzt", "buchhalter").',
+      )
+      pending.role = '__pending_text__'
+      pendingPersonClassify.set(ctx.from!.id, pending)
+      return
+    }
+    pending.role = role
+    pendingPersonClassify.set(ctx.from!.id, pending)
+    await ctx.answerCallbackQuery()
+    await askDomainStep(ctx)
+  })
+
+  bot.callbackQuery(/^pcls_dom:(.+)$/, async (ctx) => {
+    const domainId = ctx.match[1]
+    if (!domainId) {
+      await ctx.answerCallbackQuery('Domain fehlt')
+      return
+    }
+    const pending = pendingPersonClassify.get(ctx.from!.id)
+    if (!pending || !pending.role) {
+      await ctx.answerCallbackQuery('Keine Auswahl in flight')
+      return
+    }
+    try {
+      const personId = await upsertPersonFromInline({
+        domainId,
+        role: pending.role,
+        fromEmail: pending.fromEmail,
+        fromName: pending.fromName,
+      })
+      pendingPersonClassify.delete(ctx.from!.id)
+      await ctx.answerCallbackQuery('Angelegt ✓')
+      await ctx.reply(
+        `Person ${personId} angelegt: ${pending.fromName ?? pending.fromEmail} (${pending.role}) in Domain ${domainId}. Zukünftige Mails matchen automatisch.`,
+      )
+    } catch (err) {
+      logger.error({ err }, 'person classify failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(
+        `⚠️ Anlegen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  })
+
   bot.callbackQuery(/^extend:(.+)$/, async (ctx) => {
     const taskId = ctx.match[1]
     if (!taskId) {
@@ -304,6 +423,20 @@ export function registerTelegramHandlers(
   bot.on('message:text', async (ctx) => {
     const text = ctx.message.text
     if (text.startsWith('/')) return
+
+    // Are we waiting for a free-text role for person classification?
+    const pendingPerson = pendingPersonClassify.get(ctx.from!.id)
+    if (pendingPerson && pendingPerson.role === '__pending_text__') {
+      const role = text.trim().toLowerCase().replace(/\s+/g, '_')
+      if (!/^[a-z0-9_]+$/.test(role) || role.length < 2) {
+        await ctx.reply('Sieht ungültig aus. Nur Kleinbuchstaben/Ziffern/Unterstrich, z.B. "vermieter".')
+        return
+      }
+      pendingPerson.role = role
+      pendingPersonClassify.set(ctx.from!.id, pendingPerson)
+      await askDomainStep(ctx)
+      return
+    }
 
     // Are we waiting for a new forward recipient from this user?
     const recipientTaskId = pendingRecipientEdits.get(ctx.from!.id)
@@ -441,6 +574,98 @@ async function handleApprove(taskId: string): Promise<void> {
     { taskId, sentMessageId: sentId, to: parsed.from.email },
     'reply sent',
   )
+}
+
+async function getSenderForTask(
+  taskId: string,
+): Promise<{ email: string; name: string | null } | null> {
+  const [task] = await db
+    .select({ relatedDocumentId: tasks.relatedDocumentId })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+  if (!task?.relatedDocumentId) return null
+  const [doc] = await db
+    .select({ metadata: documents.metadata })
+    .from(documents)
+    .where(eq(documents.id, task.relatedDocumentId))
+    .limit(1)
+  if (!doc) return null
+  const meta = (doc.metadata as Record<string, unknown>) ?? {}
+  const email = typeof meta.from_email === 'string' ? meta.from_email : null
+  const name = typeof meta.from_name === 'string' ? meta.from_name : null
+  if (!email) return null
+  return { email, name }
+}
+
+function buildDomainKeyboard(): InlineKeyboard {
+  const domains = config.domains.domains
+  const kb = new InlineKeyboard()
+  for (let i = 0; i < domains.length; i += 2) {
+    const a = domains[i]
+    const b = domains[i + 1]
+    if (a) kb.text(a.name, `pcls_dom:${a.id}`)
+    if (b) kb.text(b.name, `pcls_dom:${b.id}`)
+    kb.row()
+  }
+  return kb
+}
+
+async function askDomainStep(
+  ctx: { reply: (text: string, opts: { reply_markup: InlineKeyboard }) => Promise<unknown> },
+): Promise<void> {
+  await ctx.reply('In welchen Lebensbereich gehört diese Person?', {
+    reply_markup: buildDomainKeyboard(),
+  })
+}
+
+async function upsertPersonFromInline(input: {
+  domainId: string
+  role: string
+  fromEmail: string
+  fromName: string | null
+}): Promise<string> {
+  // Try to find existing person by email match
+  const all = await db.select().from(persons)
+  const existing = all.find((p) =>
+    p.emails?.some((e) => e.toLowerCase() === input.fromEmail.toLowerCase()),
+  )
+  if (existing) {
+    await db
+      .update(persons)
+      .set({
+        role: input.role,
+        domainId: input.domainId,
+        updatedAt: new Date(),
+      })
+      .where(eq(persons.id, existing.id))
+    return existing.id
+  }
+
+  // Derive a snake_case id from name or email-local
+  const base = (
+    input.fromName ?? input.fromEmail.split('@')[0] ?? 'unknown'
+  )
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40)
+  let id = base || 'person'
+  // Disambiguate if id collides
+  let suffix = 2
+  while (all.some((p) => p.id === id)) {
+    id = `${base}_${suffix++}`
+  }
+
+  await db.insert(persons).values({
+    id,
+    domainId: input.domainId,
+    name: input.fromName ?? input.fromEmail,
+    role: input.role,
+    emails: [input.fromEmail],
+    phones: [],
+  })
+  return id
 }
 
 async function handleExtend(taskId: string): Promise<void> {

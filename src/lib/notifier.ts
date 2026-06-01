@@ -46,6 +46,8 @@ export interface DraftNotification {
   summary: string
   draftText: string
   urgency: 'low' | 'med' | 'high'
+  /** Set true when the sender isn't in the persons DB — adds [👤 Anlegen] button. */
+  senderUnknown?: boolean
 }
 
 export async function notifyDraft(input: DraftNotification): Promise<void> {
@@ -71,6 +73,9 @@ export async function notifyDraft(input: DraftNotification): Promise<void> {
     .text('📖 Mehr', `extend:${input.taskId}`)
     .text('✓ Erledigt', `done:${input.taskId}`)
     .text('🗑', `discard:${input.taskId}`)
+  if (input.senderUnknown) {
+    keyboard.row().text('👤 Sender anlegen', `person_add:${input.taskId}`)
+  }
 
   await safeSend(text, keyboard)
 }
@@ -86,6 +91,7 @@ export interface ForwardNotification {
   coverNote: string
   attachments: string[]
   urgency: 'low' | 'med' | 'high'
+  senderUnknown?: boolean
 }
 
 export async function notifyForward(input: ForwardNotification): Promise<void> {
@@ -111,6 +117,47 @@ export async function notifyForward(input: ForwardNotification): Promise<void> {
     .text('📖 Mehr', `extend:${input.taskId}`)
     .text('✓ Erledigt', `done:${input.taskId}`)
     .text('🗑', `discard:${input.taskId}`)
+  if (input.senderUnknown) {
+    keyboard.row().text('👤 Sender anlegen', `person_add:${input.taskId}`)
+  }
+
+  await safeSend(text, keyboard)
+}
+
+export interface FyiNotification {
+  taskId: string
+  fromName?: string | undefined
+  fromEmail: string
+  subject: string
+  summary: string
+  urgency: 'low' | 'med' | 'high'
+  /** "Vertrag", "Bank-Kontakt", "Hochpriorität" — wird als Begründung gezeigt. */
+  reason: string
+  senderUnknown?: boolean
+}
+
+export async function notifyFyi(input: FyiNotification): Promise<void> {
+  if (!registeredBot || registeredUserId === null) {
+    logger.debug('notifier not registered, skipping fyi notification')
+    return
+  }
+
+  const sender = shortSender(input.fromName, input.fromEmail)
+  const urgencyIcon =
+    input.urgency === 'high' ? '🔴' : input.urgency === 'med' ? '📌' : '⚪'
+
+  const text =
+    `${urgencyIcon} *${escapeMd(sender)}* · _${escapeMd(input.reason)}_\n` +
+    `${escapeMd(shortLine(input.subject, 80))}\n` +
+    `${escapeMd(shortLine(input.summary, 160))}`
+
+  const keyboard = new InlineKeyboard()
+    .text('📖 Mehr', `extend:${input.taskId}`)
+    .text('✓ Gesehen', `done:${input.taskId}`)
+    .text('🗑', `discard:${input.taskId}`)
+  if (input.senderUnknown) {
+    keyboard.row().text('👤 Sender anlegen', `person_add:${input.taskId}`)
+  }
 
   await safeSend(text, keyboard)
 }

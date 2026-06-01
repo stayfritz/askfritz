@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../integrations/postgres/db.js'
 import {
   documents,
+  persons,
   tasks,
   threads,
   topics,
@@ -19,8 +20,12 @@ import {
 import { classify, type Classification } from './classifier.js'
 import { draftReply } from './drafter.js'
 import { logger } from '../lib/logger.js'
-import { notifyDraft, notifyForward } from '../lib/notifier.js'
-import { config, type ForwardingRule } from '../lib/config.js'
+import { notifyDraft, notifyForward, notifyFyi } from '../lib/notifier.js'
+import {
+  config,
+  type ForwardingRule,
+  type NotifyFyiRule,
+} from '../lib/config.js'
 
 export interface IngestionResult {
   messageId: string
@@ -152,6 +157,7 @@ export async function ingestMessage(
           coverNote,
           attachments: parsed.attachments.map((a) => a.filename),
           urgency: classification.urgency,
+          senderUnknown: classification.sender_person_id === null,
         })
       }
     } else if (classification.intent === 'action_required' && doc?.id) {
@@ -192,7 +198,41 @@ export async function ingestMessage(
           summary: classification.summary,
           draftText: draft,
           urgency: classification.urgency,
+          senderUnknown: classification.sender_person_id === null,
         })
+      }
+    } else if (doc?.id) {
+      // Neither forward nor reply — check notify_fyi rules.
+      const senderRole = await resolveSenderRole(classification.sender_person_id)
+      const fyiMatch = matchNotifyFyiRule(classification, senderRole)
+      if (fyiMatch) {
+        const [task] = await db
+          .insert(tasks)
+          .values({
+            topicId,
+            relatedDocumentId: doc.id,
+            kind: 'fyi_notify',
+            description: `FYI (${fyiMatch.reason ?? 'wichtig'}): ${classification.summary}`,
+            status: 'pending_user',
+            requiresDecision: false,
+            draftContent: null,
+          })
+          .returning({ id: tasks.id })
+        taskCreated = true
+        fritzState = 'seen'
+
+        if (task?.id) {
+          await notifyFyi({
+            taskId: task.id,
+            fromName: parsed.from.name,
+            fromEmail: parsed.from.email,
+            subject: parsed.subject,
+            summary: classification.summary,
+            urgency: classification.urgency,
+            reason: fyiMatch.reason ?? 'wichtig',
+            senderUnknown: classification.sender_person_id === null,
+          })
+        }
       }
     }
 
@@ -298,6 +338,36 @@ async function uploadAttachments(
   }
 
   return paths
+}
+
+async function resolveSenderRole(
+  senderPersonId: string | null,
+): Promise<string | null> {
+  if (!senderPersonId) return null
+  const [p] = await db
+    .select({ role: persons.role })
+    .from(persons)
+    .where(eq(persons.id, senderPersonId))
+    .limit(1)
+  return p?.role ?? null
+}
+
+function matchNotifyFyiRule(
+  c: Classification,
+  senderRole: string | null,
+): NotifyFyiRule | null {
+  for (const rule of config.policies.notify_fyi) {
+    if (rule.when_doc_type_in && c.doc_type) {
+      if (rule.when_doc_type_in.includes(c.doc_type)) return rule
+    }
+    if (rule.when_sender_role_in && senderRole) {
+      // Match by role substring after "service_provider:" prefix, or exact.
+      const normalized = senderRole.split(':').pop() ?? senderRole
+      if (rule.when_sender_role_in.includes(normalized)) return rule
+    }
+    if (rule.when_urgency && rule.when_urgency === c.urgency) return rule
+  }
+  return null
 }
 
 /**

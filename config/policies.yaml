@@ -29,6 +29,24 @@ policies:
       - schedule_meeting
       - mark_topic_done
 
+# Notify-Regeln für FYIs: Mails ohne nötige Antwort, die du aber trotzdem
+# sehen willst (Bank, Steuerberater, Verträge, …). Ein Match → Telegram-Karte
+# mit [📖 Mehr] [✓ Gesehen] [🗑] (keine Reply/Forward-Aktion).
+# Erste passende Regel gewinnt; "reason" ist nur fürs Logging.
+notify_fyi:
+  - when_doc_type_in: [contract, statement]
+    reason: Vertrag-/Statement-Mail
+
+  - when_sender_role_in:
+      - banker
+      - tax_advisor
+      - insurance_admin
+      - lawyer
+    reason: Wichtiger Kontakt (Bank/Steuer/Versicherung/Anwalt)
+
+  - when_urgency: high
+    reason: Hochpriorität
+
 # Forwarding-Regeln. Classifier benutzt diese als Ziel-Tabelle für
 # `suggested_forward_to`. Validierung in ingestion: nur Ziele aus dieser Liste
 # werden akzeptiert.

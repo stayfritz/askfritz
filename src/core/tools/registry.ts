@@ -11,6 +11,7 @@ import {
   lifestateTaskDone,
   lifestateTaskSnooze,
   lifestateTopicDone,
+  lifestateUpsertPerson,
 } from './lifestate.js'
 import {
   calendarFindFreeSlot,
@@ -31,6 +32,7 @@ export const allTools: AnyTool[] = [
   lifestateTaskDone,
   lifestateTaskSnooze,
   lifestateTopicDone,
+  lifestateUpsertPerson,
 ]
 
 export function findTool(name: string): AnyTool | undefined {

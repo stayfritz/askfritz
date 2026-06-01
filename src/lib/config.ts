@@ -60,12 +60,21 @@ const forwardingRuleSchema = z.object({
   requires_approval: z.boolean().default(true),
 })
 
+const notifyFyiRuleSchema = z.object({
+  when_doc_type_in: z.array(z.string()).optional(),
+  when_sender_role_in: z.array(z.string()).optional(),
+  when_urgency: z.enum(['low', 'med', 'high']).optional(),
+  reason: z.string().optional(),
+})
+
 const policiesSchema = z.object({
   policies: z.record(z.string(), policySchema),
   forwarding_rules: z.array(forwardingRuleSchema).default([]),
+  notify_fyi: z.array(notifyFyiRuleSchema).default([]),
 })
 
 export type ForwardingRule = z.infer<typeof forwardingRuleSchema>
+export type NotifyFyiRule = z.infer<typeof notifyFyiRuleSchema>
 
 const routingSchema = z.object({
   inbound: z.object({

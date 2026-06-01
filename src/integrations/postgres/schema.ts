@@ -47,6 +47,7 @@ export const taskKind = pgEnum('task_kind', [
   'reply',
   'forward',
   'calendar_event',
+  'fyi_notify',
 ])
 
 export const threadStatus = pgEnum('thread_status', [
