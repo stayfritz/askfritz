@@ -6,12 +6,14 @@ import {
   documents,
   persons,
   tasks,
+  threads,
   topics,
 } from '../integrations/postgres/schema.js'
 import { config } from '../lib/config.js'
 import { answerQuery } from './query.js'
 import { draftReply } from './drafter.js'
 import { ingestMessage } from './ingestion.js'
+import { findStaleThreads } from './followups.js'
 import { notifyDraft, notifyExtended } from '../lib/notifier.js'
 import { resetConversation } from '../lib/conversation-store.js'
 import {
@@ -91,6 +93,9 @@ export function registerTelegramHandlers(
       'Stell mir Fragen zu deinen Vorgängen, oder warte auf Mail-Entwürfe.\n\n' +
         '/status — pending Tasks + Übersicht\n' +
         '/topics — alle offenen Topics\n' +
+        '/followups — stagnierende Threads (du musst antworten / wartest auf Antwort)\n' +
+        '/reingest <msg_id> — Mail neu klassifizieren\n' +
+        '/reset — Konversations-Verlauf löschen\n' +
         '/help — dieser Text',
     )
   })
@@ -155,6 +160,44 @@ export function registerTelegramHandlers(
       .map((t, i) => `${i + 1}. ${t.name} (priority: ${t.priority})`)
       .join('\n')
     await ctx.reply(`Offene Topics (${openTopics.length}):\n\n${list}`)
+  })
+
+  bot.command('followups', async (ctx) => {
+    await ctx.api.sendChatAction(ctx.chat.id, 'typing')
+    try {
+      const stale = await findStaleThreads()
+      if (stale.length === 0) {
+        await ctx.reply('Alles im Fluss — keine stagnierenden Threads. 🌊')
+        return
+      }
+      const wu = stale.filter((t) => t.status === 'waiting_user')
+      const wp = stale.filter((t) => t.status === 'waiting_partner')
+
+      const lines: string[] = []
+      if (wu.length > 0) {
+        lines.push(`🟡 *Du musst antworten* (${wu.length})`)
+        for (const t of wu.slice(0, 10)) {
+          const who = t.participants.find((p) => !p.includes('stayfritz.com')) ?? t.participants[0] ?? '(?)'
+          const summary = (t.summary ?? '').replace(/\s+/g, ' ').slice(0, 90)
+          lines.push(`• ${who} — ${summary} (${t.daysStale}d offen)`)
+        }
+        lines.push('')
+      }
+      if (wp.length > 0) {
+        lines.push(`🟠 *Warten auf Antwort von anderen* (${wp.length})`)
+        for (const t of wp.slice(0, 10)) {
+          const who = t.participants.find((p) => !p.includes('stayfritz.com')) ?? t.participants[0] ?? '(?)'
+          const summary = (t.summary ?? '').replace(/\s+/g, ' ').slice(0, 90)
+          lines.push(`• ${who} — ${summary} (${t.daysStale}d her)`)
+        }
+      }
+      await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' })
+    } catch (err) {
+      logger.error({ err }, 'followups failed')
+      await ctx.reply(
+        `⚠️ Followup-Scan fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   })
 
   bot.command('reingest', async (ctx) => {
@@ -286,6 +329,7 @@ export function registerTelegramHandlers(
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(eq(tasks.id, taskId))
     await labelTaskMessage(taskId, 'discarded')
+    await setThreadStatusForTask(taskId, 'closed')
     await ctx.answerCallbackQuery('Verworfen 🗑')
     await ctx.editMessageReplyMarkup({ reply_markup: undefined })
   })
@@ -301,6 +345,7 @@ export function registerTelegramHandlers(
       .set({ status: 'done', updatedAt: new Date() })
       .where(eq(tasks.id, taskId))
     await labelTaskMessage(taskId, 'seen')
+    await setThreadStatusForTask(taskId, 'closed')
     await ctx.answerCallbackQuery('Erledigt ✓')
     await ctx.editMessageReplyMarkup({ reply_markup: undefined })
   })
@@ -516,6 +561,36 @@ export function registerTelegramHandlers(
  * Fritz state. Best-effort: silent no-op if the task has no related document
  * or the document isn't a Gmail message (e.g. standalone calendar events).
  */
+/** Update the thread.status for the thread the given task is linked to. */
+async function setThreadStatusForTask(
+  taskId: string,
+  status: 'open' | 'waiting_user' | 'waiting_partner' | 'closed',
+): Promise<void> {
+  try {
+    const [task] = await db
+      .select({ relatedDocumentId: tasks.relatedDocumentId })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .limit(1)
+    if (!task?.relatedDocumentId) return
+    const [doc] = await db
+      .select({ metadata: documents.metadata })
+      .from(documents)
+      .where(eq(documents.id, task.relatedDocumentId))
+      .limit(1)
+    const meta = (doc?.metadata as Record<string, unknown>) ?? {}
+    const threadExtId =
+      typeof meta.thread_id === 'string' ? meta.thread_id : null
+    if (!threadExtId) return
+    await db
+      .update(threads)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(threads.externalId, threadExtId))
+  } catch (err) {
+    logger.error({ err, taskId, status }, 'thread status update failed')
+  }
+}
+
 async function labelTaskMessage(
   taskId: string,
   state: FritzState,
@@ -587,6 +662,7 @@ async function handleApprove(taskId: string): Promise<void> {
     .where(eq(tasks.id, taskId))
 
   await setFritzState(gmail, doc.sourceId, 'replied')
+  await setThreadStatusForTask(taskId, 'waiting_partner')
 
   logger.info(
     { taskId, sentMessageId: sentId, to: parsed.from.email },
@@ -965,6 +1041,8 @@ async function handleForward(taskId: string): Promise<string> {
     .where(eq(tasks.id, taskId))
 
   await setFritzState(gmail, doc.sourceId, 'forwarded')
+  // Forward closes the loop — no follow-up expected from the accounting team.
+  await setThreadStatusForTask(taskId, 'closed')
 
   logger.info(
     { taskId, sentMessageId: sentId, to: task.forwardTo, attachments: attachments.length },

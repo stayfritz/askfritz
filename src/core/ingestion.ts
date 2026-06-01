@@ -261,6 +261,12 @@ export async function ingestMessage(
       to: parsed.to,
       receivedAt: parsed.receivedAt,
       summary: classification.summary,
+      // An action_required incoming mail flips the thread to "waiting_user"
+      // (Thomas owes the response). For fyi/notification we don't change the
+      // existing status — if it was waiting_partner, this might be a partial
+      // update that doesn't close the loop.
+      newStatus:
+        classification.intent === 'action_required' ? 'waiting_user' : null,
     })
 
     // Best-effort Gmail label so Thomas sees Fritz' state in the inbox.
@@ -499,6 +505,8 @@ async function upsertThread(input: {
   to: string[]
   receivedAt: Date
   summary: string
+  /** Force-override the status; null = keep existing (or 'open' on insert). */
+  newStatus?: 'open' | 'waiting_user' | 'waiting_partner' | 'closed' | null
 }): Promise<void> {
   const existing = await db
     .select({
@@ -506,6 +514,7 @@ async function upsertThread(input: {
       domainId: threads.domainId,
       topicId: threads.topicId,
       participants: threads.participants,
+      status: threads.status,
     })
     .from(threads)
     .where(eq(threads.externalId, input.externalId))
@@ -517,6 +526,9 @@ async function upsertThread(input: {
   )
 
   if (prev) {
+    // If status was 'closed' and incoming is just FYI, don't reopen.
+    // If new explicit status is given, take it. Otherwise keep prev.
+    const status = input.newStatus ?? prev.status
     await db
       .update(threads)
       .set({
@@ -525,6 +537,7 @@ async function upsertThread(input: {
         participants: mergedParticipants,
         lastMessageAt: input.receivedAt,
         summary: input.summary,
+        status,
         updatedAt: new Date(),
       })
       .where(eq(threads.id, prev.id))
@@ -534,7 +547,7 @@ async function upsertThread(input: {
       domainId: input.domainId,
       topicId: input.topicId,
       participants: mergedParticipants,
-      status: 'open',
+      status: input.newStatus ?? 'open',
       lastMessageAt: input.receivedAt,
       summary: input.summary,
     })
