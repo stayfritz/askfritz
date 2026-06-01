@@ -9,7 +9,7 @@ import {
 import { answerQuery } from './query.js'
 import { draftReply } from './drafter.js'
 import { ingestMessage } from './ingestion.js'
-import { notifyDraft } from '../lib/notifier.js'
+import { notifyDraft, notifyExtended } from '../lib/notifier.js'
 import { resetConversation } from '../lib/conversation-store.js'
 import {
   downloadAttachment,
@@ -266,7 +266,39 @@ export function registerTelegramHandlers(
     await labelTaskMessage(taskId, 'discarded')
     await ctx.answerCallbackQuery('Verworfen 🗑')
     await ctx.editMessageReplyMarkup({ reply_markup: undefined })
-    await ctx.reply('Entwurf verworfen, Task auf cancelled.')
+  })
+
+  bot.callbackQuery(/^done:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    await db
+      .update(tasks)
+      .set({ status: 'done', updatedAt: new Date() })
+      .where(eq(tasks.id, taskId))
+    await labelTaskMessage(taskId, 'seen')
+    await ctx.answerCallbackQuery('Erledigt ✓')
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+  })
+
+  bot.callbackQuery(/^extend:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    try {
+      await handleExtend(taskId)
+      await ctx.answerCallbackQuery()
+    } catch (err) {
+      logger.error({ err, taskId }, 'extend failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(
+        `⚠️ Mehr-Details-Anzeige fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   })
 
   bot.on('message:text', async (ctx) => {
@@ -409,6 +441,81 @@ async function handleApprove(taskId: string): Promise<void> {
     { taskId, sentMessageId: sentId, to: parsed.from.email },
     'reply sent',
   )
+}
+
+async function handleExtend(taskId: string): Promise<void> {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+  if (!task) throw new Error('task not found')
+
+  if (task.kind === 'calendar_event') {
+    const p = task.calendarPayload
+    if (!p) {
+      await notifyExtended({
+        taskKind: 'calendar_event',
+        body: '(kein Payload)',
+      })
+      return
+    }
+    const lines = [
+      `Titel: ${p.summary}`,
+      `Start: ${p.start_iso}`,
+      `Ende:  ${p.end_iso}`,
+      `Zeitzone: ${p.timezone}`,
+      p.location ? `Ort: ${p.location}` : null,
+      p.attendees && p.attendees.length
+        ? `Teilnehmer:\n${p.attendees.map((a) => `  • ${a}`).join('\n')}`
+        : null,
+      p.send_invites ? '📧 Einladungs-Mails werden gesendet.' : '📭 Keine Einladungs-Mails.',
+      p.description ? `\nBeschreibung:\n${p.description}` : null,
+    ].filter(Boolean)
+    await notifyExtended({
+      taskKind: 'calendar_event',
+      body: lines.join('\n'),
+    })
+    return
+  }
+
+  if (!task.relatedDocumentId) {
+    await notifyExtended({
+      taskKind: task.kind === 'forward' ? 'forward' : 'reply',
+      body: task.draftContent ?? '(kein Inhalt)',
+    })
+    return
+  }
+
+  const [doc] = await db
+    .select()
+    .from(documents)
+    .where(eq(documents.id, task.relatedDocumentId))
+    .limit(1)
+
+  const fromEmail =
+    typeof (doc?.metadata as Record<string, unknown>)?.from_email === 'string'
+      ? ((doc?.metadata as Record<string, unknown>).from_email as string)
+      : undefined
+
+  if (task.kind === 'forward') {
+    await notifyExtended({
+      taskKind: 'forward',
+      from: fromEmail,
+      to: task.forwardTo ?? undefined,
+      subject: doc?.originalSubject ?? undefined,
+      body: task.draftContent ?? '(kein Cover-Text)',
+    })
+    return
+  }
+
+  // reply
+  await notifyExtended({
+    taskKind: 'reply',
+    from: fromEmail,
+    subject: doc?.originalSubject ?? undefined,
+    body: task.draftContent ?? '(kein Entwurf)',
+  })
 }
 
 async function handleReingest(messageId: string): Promise<string> {

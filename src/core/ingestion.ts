@@ -59,6 +59,8 @@ export async function ingestMessage(
 
     const classification = await classify({
       from: parsed.from,
+      to: parsed.to,
+      cc: parsed.cc,
       subject: parsed.subject,
       bodyText: parsed.bodyText,
       attachments: parsed.attachments.map((a) => ({

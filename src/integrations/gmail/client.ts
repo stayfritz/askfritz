@@ -102,6 +102,7 @@ export interface ParsedMessage {
   receivedAt: Date
   from: { name?: string; email: string }
   to: string[]
+  cc: string[]
   subject: string
   bodyText: string
   bodyHtml?: string
@@ -133,6 +134,10 @@ export function parseMessage(raw: gmail_v1.Schema$Message): ParsedMessage {
 
   const from = parseEmailAddress(getHeader('from'))
   const to = getHeader('to')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const cc = getHeader('cc')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
@@ -181,6 +186,7 @@ export function parseMessage(raw: gmail_v1.Schema$Message): ParsedMessage {
     receivedAt: new Date(Number(raw.internalDate ?? '0')),
     from,
     to,
+    cc,
     subject,
     bodyText,
     bodyHtml,

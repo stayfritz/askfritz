@@ -4,6 +4,8 @@ import { config } from '../lib/config.js'
 
 export interface ClassificationInput {
   from: { name?: string | undefined; email: string }
+  to: string[]
+  cc: string[]
   subject: string
   bodyText: string
   attachments: Array<{ filename: string; mimeType: string }>
@@ -65,6 +67,8 @@ function buildSystemPrompt(): string {
 
 Your job: classify each inbound email into a known life-domain, suggest a topic, match the sender if possible, assess intent/urgency, and decide whether the mail should be replied to, forwarded to a routing inbox, or left alone. Output strict JSON only.
 
+THOMAS' PRIMARY EMAIL: ${config.system.email.primary}
+
 KNOWN DOMAINS:
 ${knownDomains}
 
@@ -78,7 +82,7 @@ RULES:
 - domain_id: pick the matching domain id, or null if uncertain. When null, the email is flagged for human review.
 - topic_hint: short snake_case slug suggesting the topic (e.g. "krankenversicherung_es_kinder", "steuer_2025_q1", "geschaeftskonto_setup"). Used to fuzzy-match or create topics. Null if unclear.
 - sender_person_id: if the From email matches one of the known persons' emails, set their id. Otherwise null (= new contact, will be reviewed).
-- intent: "query" (asks for info), "fyi" (informational update), "action_required" (Thomas must decide or reply), or "unknown".
+- intent: "query" (asks for info), "fyi" (informational update), "action_required" (Thomas must decide or reply), or "unknown". WICHTIG zur CC-Erkennung: wenn Thomas' Primary-Email nur in CC steht und NICHT in TO, dann ist intent fast immer "fyi" — der Mail-Absender hat Thomas nur informiert, die eigentliche Aktion liegt beim TO-Empfänger. Nur wenn der Body explizit Thomas direkt anspricht oder eine Frage stellt ("Thomas, kannst du …?", "@Thomas"), dann darf intent="action_required" sein, auch bei reinem CC.
 - urgency: "high" (time-critical or money/legal/health), "med" (normal), "low" (can wait).
 - language: ISO 639-1 code of the email body (de, en, es).
 - summary: 1-2 sentence German summary of what the email is about and what (if anything) is expected from Thomas.
@@ -138,9 +142,18 @@ export async function classify(
           .map((a) => `- ${a.filename} (${a.mimeType})`)
           .join('\n')
 
+  const primary = config.system.email.primary.toLowerCase()
+  const isInTo = input.to.some((addr) => addr.toLowerCase().includes(primary))
+  const isInCc = input.cc.some((addr) => addr.toLowerCase().includes(primary))
+  const recipientNote = !isInTo && isInCc
+    ? '\nNOTE: Thomas ist nur CC, NICHT TO. Default ist intent=fyi außer der Body spricht ihn explizit an.'
+    : ''
+
   const userPrompt = `Classify this email. Respond with only the JSON object.
 
 FROM: ${fromLine}
+TO:   ${input.to.length ? input.to.join(', ') : '(none)'}
+CC:   ${input.cc.length ? input.cc.join(', ') : '(none)'}${recipientNote}
 SUBJECT: ${input.subject}
 
 BODY:
