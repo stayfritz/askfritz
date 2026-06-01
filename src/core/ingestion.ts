@@ -11,6 +11,7 @@ import {
   makeGmailClient,
   type ParsedMessage,
 } from '../integrations/gmail/client.js'
+import { setFritzState, type FritzState } from '../integrations/gmail/labels.js'
 import {
   makeDropboxClient,
   uploadFile,
@@ -116,6 +117,7 @@ export async function ingestMessage(
       .returning({ id: documents.id })
 
     let taskCreated = false
+    let fritzState: FritzState = 'seen'
     const forwardRule = matchForwardingRule(classification)
 
     if (forwardRule && doc?.id) {
@@ -134,6 +136,7 @@ export async function ingestMessage(
         })
         .returning({ id: tasks.id })
       taskCreated = true
+      fritzState = 'forward-pending'
 
       if (task?.id) {
         await notifyForward({
@@ -176,6 +179,7 @@ export async function ingestMessage(
         })
         .returning({ id: tasks.id })
       taskCreated = true
+      fritzState = 'draft-pending'
 
       if (task?.id && draft) {
         await notifyDraft({
@@ -199,6 +203,11 @@ export async function ingestMessage(
       receivedAt: parsed.receivedAt,
       summary: classification.summary,
     })
+
+    // Best-effort Gmail label so Thomas sees Fritz' state in the inbox.
+    // Errors are caught inside setFritzState and never propagate up.
+    const labelGmail = makeGmailClient()
+    void setFritzState(labelGmail, parsed.id, fritzState)
 
     return {
       messageId: parsed.id,

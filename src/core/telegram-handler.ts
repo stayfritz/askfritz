@@ -19,6 +19,7 @@ import {
   parseMessage,
   sendReply,
 } from '../integrations/gmail/client.js'
+import { setFritzState, type FritzState } from '../integrations/gmail/labels.js'
 import {
   createEvent,
   makeCalendarClient,
@@ -262,6 +263,7 @@ export function registerTelegramHandlers(
       .update(tasks)
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(eq(tasks.id, taskId))
+    await labelTaskMessage(taskId, 'discarded')
     await ctx.answerCallbackQuery('Verworfen 🗑')
     await ctx.editMessageReplyMarkup({ reply_markup: undefined })
     await ctx.reply('Entwurf verworfen, Task auf cancelled.')
@@ -326,6 +328,35 @@ export function registerTelegramHandlers(
   })
 }
 
+/**
+ * Look up the Gmail message_id behind a task and label it with the given
+ * Fritz state. Best-effort: silent no-op if the task has no related document
+ * or the document isn't a Gmail message (e.g. standalone calendar events).
+ */
+async function labelTaskMessage(
+  taskId: string,
+  state: FritzState,
+): Promise<void> {
+  try {
+    const [task] = await db
+      .select({ relatedDocumentId: tasks.relatedDocumentId })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .limit(1)
+    if (!task?.relatedDocumentId) return
+    const [doc] = await db
+      .select({ source: documents.source, sourceId: documents.sourceId })
+      .from(documents)
+      .where(eq(documents.id, task.relatedDocumentId))
+      .limit(1)
+    if (!doc || doc.source !== 'gmail' || !doc.sourceId) return
+    const gmail = makeGmailClient()
+    await setFritzState(gmail, doc.sourceId, state)
+  } catch (err) {
+    logger.error({ err, taskId, state }, 'labelTaskMessage failed')
+  }
+}
+
 async function handleApprove(taskId: string): Promise<void> {
   const [task] = await db
     .select()
@@ -371,6 +402,8 @@ async function handleApprove(taskId: string): Promise<void> {
     .update(tasks)
     .set({ status: 'done', updatedAt: new Date() })
     .where(eq(tasks.id, taskId))
+
+  await setFritzState(gmail, doc.sourceId, 'replied')
 
   logger.info(
     { taskId, sentMessageId: sentId, to: parsed.from.email },
@@ -524,6 +557,8 @@ async function handleForward(taskId: string): Promise<string> {
     .update(tasks)
     .set({ status: 'done', updatedAt: new Date() })
     .where(eq(tasks.id, taskId))
+
+  await setFritzState(gmail, doc.sourceId, 'forwarded')
 
   logger.info(
     { taskId, sentMessageId: sentId, to: task.forwardTo, attachments: attachments.length },
