@@ -6,13 +6,34 @@ domains:
       Sozialversicherung, Krankenversicherung, Bankkonto, Ummeldungen.
     default_language: de
 
-  # Spätere Domains (kommen nach v0):
-  # - id: privat
-  #   name: Privat
-  #   description: Privatleben, Verträge, Versicherungen (DE).
-  #   default_language: de
-  #
-  # - id: familie
-  #   name: Familie
-  #   description: Kinder, Schule, Arzt, Familien-Logistik.
-  #   default_language: de
+  - id: stayfritz_de
+    name: StayFritz Deutschland
+    description: |
+      Deutsche Aktivitäten: Fritzbase Tegernsee GmbH, Hotelbetrieb, deutsche
+      Steuer, Banken (VR Tegernsee), Versicherungen für die deutsche Entität,
+      Vertragspartner und Behörden in Deutschland.
+    default_language: de
+
+  - id: privat
+    name: Privat
+    description: |
+      Privatleben breit gefasst — inkl. Familie (Kerstin, Kinder),
+      private Versicherungen, private Steuer, Arzt, Schule, Freunde,
+      private Verträge und Verwaltung. ("privat" und "familie" sind nicht
+      trennscharf — beides gehört hier rein.)
+    default_language: de
+
+  - id: ai_news
+    name: AI / Tech News
+    description: |
+      KI- und Tech-Newsletter, Provider-Updates (Anthropic, OpenAI, Google),
+      Tool-Release-Mails, Industry-Insights. Diese Mails sind fast immer FYI,
+      brauchen keine Aktion — nur Awareness und Archiv.
+    default_language: en
+
+  - id: immo_news
+    name: Immobilien-News
+    description: |
+      Immobilien-Newsletter (idealista, ImmoScout, regionale Makler-Alerts),
+      Marktupdates, neue Listings. FYI, evtl. für die Spanien-Suche relevant.
+    default_language: de

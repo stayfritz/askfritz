@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import type { Tool } from './types.js'
 import { db } from '../../integrations/postgres/db.js'
 import {
+  domains,
   persons,
   tasks,
   topics,
@@ -201,5 +202,41 @@ export const lifestateUpsertPerson: Tool<
     })
     logger.info({ personId: id, role: input.role }, 'person created via tool')
     return { ok: true, person_id: id, created: true }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// lifestate_list_domains
+// ---------------------------------------------------------------------------
+
+const listDomainsInput = z.object({})
+
+export const lifestateListDomains: Tool<
+  z.infer<typeof listDomainsInput>,
+  {
+    count: number
+    domains: Array<{
+      id: string
+      name: string
+      description: string | null
+      default_language: string
+    }>
+  }
+> = {
+  name: 'lifestate_list_domains',
+  description:
+    'Liste alle konfigurierten Lebensbereiche (Domains) auf. Nutze das VOR lifestate_upsert_person wenn unklar ist, in welche Domain eine Person gehört, oder wenn Thomas eine Domain erwähnt von der du nicht sicher bist ob sie existiert. Read-only.',
+  inputSchema: listDomainsInput,
+  execute: async () => {
+    const rows = await db.select().from(domains).orderBy(domains.id)
+    return {
+      count: rows.length,
+      domains: rows.map((d) => ({
+        id: d.id,
+        name: d.name,
+        description: d.description ?? null,
+        default_language: d.defaultLanguage,
+      })),
+    }
   },
 }

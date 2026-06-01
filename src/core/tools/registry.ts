@@ -8,6 +8,7 @@ import {
   gmailUnsubscribe,
 } from './gmail.js'
 import {
+  lifestateListDomains,
   lifestateTaskDone,
   lifestateTaskSnooze,
   lifestateTopicDone,
@@ -33,6 +34,7 @@ export const allTools: AnyTool[] = [
   lifestateTaskSnooze,
   lifestateTopicDone,
   lifestateUpsertPerson,
+  lifestateListDomains,
 ]
 
 export function findTool(name: string): AnyTool | undefined {

@@ -2,6 +2,7 @@ import { desc, eq } from 'drizzle-orm'
 import { db } from '../integrations/postgres/db.js'
 import {
   documents,
+  domains,
   persons,
   tasks,
   topics,
@@ -39,7 +40,8 @@ Life-State-Tools:
 - lifestate_task_done: Task als erledigt markieren
 - lifestate_task_snooze: Task auf später schieben (mit ISO Datetime, Europe/Berlin)
 - lifestate_topic_done: Topic abschließen (markiert auch verlinkte Threads als closed)
-- lifestate_upsert_person: Person anlegen/updaten. Nutze das, wenn Thomas dir mitteilt dass jemand eine bestimmte Rolle hat ("X ist mein Y", "Pichler ist mein Banker bei VR Tegernsee"). Match per Email. Bekannte Rollen die notify_fyi-Regeln triggern: banker, tax_advisor, insurance_admin, lawyer. Nach erfolgreichem Anlegen kurz bestätigen und ggf. fragen ob auch automatische Notify gewünscht ist.
+- lifestate_list_domains: Liste alle konfigurierten Lebensbereiche. WICHTIG: bei jedem Person-Upsert wo Thomas eine Domain erwähnt die du nicht 100% kennst, ZUERST lifestate_list_domains aufrufen. NIEMALS eine domain_id raten — wenn Thomas "stayfritz_de" oder "geschäftlich" sagt und du nicht sicher bist ob die Domain existiert, ruf zuerst das Tool auf. Falls die Domain wirklich fehlt: dem User sagen "Domain X existiert nicht. Verfügbar sind: [a, b, c]. Welche soll ich nutzen?" — NICHT mit einer falschen Domain fortfahren.
+- lifestate_upsert_person: Person anlegen/updaten. Nutze das, wenn Thomas dir mitteilt dass jemand eine bestimmte Rolle hat ("X ist mein Y", "Pichler ist mein Banker bei VR Tegernsee"). Match per Email. Bekannte Rollen die notify_fyi-Regeln triggern: banker, tax_advisor, insurance_admin, lawyer. domain_id MUSS aus lifestate_list_domains stammen — kein Raten. Nach erfolgreichem Anlegen kurz bestätigen.
 
 Verhalten:
 - Wenn Thomas eine Aktion will, NUTZE die Tools direkt. Frag nicht erst "soll ich" — mach es, dann melde Ergebnis.
@@ -111,7 +113,7 @@ function formatBerlinTime(d: Date): string {
 }
 
 async function buildLifeStateBlock(): Promise<string> {
-  const [openTopics, pendingTasks, recentDocs, knownPersons] =
+  const [openTopics, pendingTasks, recentDocs, knownPersons, allDomains] =
     await Promise.all([
       db.select().from(topics).where(eq(topics.status, 'in_progress')),
       db.select().from(tasks).where(eq(tasks.status, 'pending_user')),
@@ -121,9 +123,14 @@ async function buildLifeStateBlock(): Promise<string> {
         .orderBy(desc(documents.receivedAt))
         .limit(MAX_DOCS_IN_CONTEXT * 6),
       db.select().from(persons),
+      db.select().from(domains).orderBy(domains.id),
     ])
 
   const personIndex = new Map(knownPersons.map((p) => [p.id, p.name]))
+  const domainsBlock =
+    allDomains
+      .map((d) => `- ${d.id} (${d.name})`)
+      .join('\n') || '(keine)'
 
   const personsBlock =
     knownPersons
@@ -174,7 +181,10 @@ async function buildLifeStateBlock(): Promise<string> {
       })
       .join('\n') || '(keine Documents)'
 
-  return `BEKANNTE KONTAKTE:
+  return `KONFIGURIERTE DOMAINS (für lifestate_upsert_person — IDs sind exakt zu verwenden):
+${domainsBlock}
+
+BEKANNTE KONTAKTE:
 ${personsBlock}
 
 OFFENE TOPICS:
