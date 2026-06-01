@@ -66,13 +66,29 @@ export async function notifyDraft(input: DraftNotification): Promise<void> {
     `${urgencyIcon} *${escapeMd(sender)}* · ${escapeMd(shortLine(input.subject, 80))}\n` +
     `${escapeMd(shortLine(input.summary, 160))}`
 
+  // Two card variants:
+  // - "draft ready": full action buttons (sender known, drafter already ran)
+  // - "no draft yet": [📝 Draft erstellen] + lighter buttons (unknown sender,
+  //   drafter skipped to save Sonnet calls until user explicitly asks)
+  const hasDraft = input.draftText.trim().length > 0
+
   const keyboard = new InlineKeyboard()
-    .text('✅ Senden', `approve:${input.taskId}`)
-    .text('✏️ Bearbeiten', `edit:${input.taskId}`)
-    .row()
-    .text('📖 Mehr', `extend:${input.taskId}`)
-    .text('✓ Erledigt', `done:${input.taskId}`)
-    .text('🗑', `discard:${input.taskId}`)
+  if (hasDraft) {
+    keyboard
+      .text('✅ Senden', `approve:${input.taskId}`)
+      .text('✏️ Bearbeiten', `edit:${input.taskId}`)
+      .row()
+      .text('📖 Mehr', `extend:${input.taskId}`)
+      .text('✓ Erledigt', `done:${input.taskId}`)
+      .text('🗑', `discard:${input.taskId}`)
+  } else {
+    keyboard
+      .text('📝 Draft erstellen', `gen_draft:${input.taskId}`)
+      .text('✓ Erledigt', `done:${input.taskId}`)
+      .row()
+      .text('📖 Mehr', `extend:${input.taskId}`)
+      .text('🗑', `discard:${input.taskId}`)
+  }
   if (input.senderUnknown) {
     keyboard.row().text('👤 Sender anlegen', `person_add:${input.taskId}`)
   }

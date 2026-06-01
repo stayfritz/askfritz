@@ -111,6 +111,8 @@ export interface ParsedMessage {
   messageIdHeader?: string
   /** RFC822 `References` header chain, for proper reply threading. */
   referencesHeader?: string
+  /** True if the message has a List-Unsubscribe header (RFC 8058) — reliable newsletter marker. */
+  hasListUnsubscribe: boolean
 }
 
 function decodeBase64Url(data: string): string {
@@ -179,6 +181,7 @@ export function parseMessage(raw: gmail_v1.Schema$Message): ParsedMessage {
 
   const messageIdHeader = getHeader('Message-ID') || getHeader('Message-Id') || undefined
   const referencesHeader = getHeader('References') || undefined
+  const hasListUnsubscribe = getHeader('List-Unsubscribe').length > 0
 
   return {
     id: raw.id ?? '',
@@ -193,6 +196,7 @@ export function parseMessage(raw: gmail_v1.Schema$Message): ParsedMessage {
     attachments,
     messageIdHeader,
     referencesHeader,
+    hasListUnsubscribe,
   }
 }
 

@@ -305,6 +305,24 @@ export function registerTelegramHandlers(
     await ctx.editMessageReplyMarkup({ reply_markup: undefined })
   })
 
+  bot.callbackQuery(/^gen_draft:(.+)$/, async (ctx) => {
+    const taskId = ctx.match[1]
+    if (!taskId) {
+      await ctx.answerCallbackQuery('Task-ID fehlt')
+      return
+    }
+    try {
+      await ctx.answerCallbackQuery('Erstelle Draft…')
+      await handleGenerateDraft(taskId)
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+    } catch (err) {
+      logger.error({ err, taskId }, 'gen_draft failed')
+      await ctx.reply(
+        `⚠️ Draft-Generierung fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  })
+
   bot.callbackQuery(/^person_add:(.+)$/, async (ctx) => {
     const taskId = ctx.match[1]
     if (!taskId) {
@@ -666,6 +684,62 @@ async function upsertPersonFromInline(input: {
     phones: [],
   })
   return id
+}
+
+async function handleGenerateDraft(taskId: string): Promise<void> {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+  if (!task) throw new Error('task not found')
+  if (task.kind !== 'reply')
+    throw new Error('only reply tasks support gen_draft')
+  if (!task.relatedDocumentId)
+    throw new Error('no related document — cannot draft')
+
+  const [doc] = await db
+    .select()
+    .from(documents)
+    .where(eq(documents.id, task.relatedDocumentId))
+    .limit(1)
+  if (!doc || doc.source !== 'gmail' || !doc.sourceId)
+    throw new Error('related document missing or non-gmail')
+
+  const gmail = makeGmailClient()
+  const raw = await fetchMessage(gmail, doc.sourceId)
+  const parsed = parseMessage(raw)
+  const meta = (doc.metadata as Record<string, unknown>) ?? {}
+  const language = typeof meta.language === 'string' ? meta.language : 'de'
+
+  const draft = await draftReply({
+    originalFrom: parsed.from,
+    originalSubject: parsed.subject,
+    originalBody: parsed.bodyText,
+    language,
+    summary: doc.summary ?? '',
+  })
+
+  await db
+    .update(tasks)
+    .set({ draftContent: draft, updatedAt: new Date() })
+    .where(eq(tasks.id, taskId))
+
+  const urgencyRaw = meta.urgency
+  const urgency: 'low' | 'med' | 'high' =
+    urgencyRaw === 'high' || urgencyRaw === 'low' ? urgencyRaw : 'med'
+
+  await notifyDraft({
+    taskId,
+    fromName: parsed.from.name,
+    fromEmail: parsed.from.email,
+    subject: parsed.subject,
+    summary: doc.summary ?? '',
+    draftText: draft,
+    urgency,
+    senderUnknown: false,
+  })
+  logger.info({ taskId }, 'draft generated on-demand')
 }
 
 async function handleExtend(taskId: string): Promise<void> {

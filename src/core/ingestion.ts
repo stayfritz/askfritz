@@ -62,6 +62,15 @@ export async function ingestMessage(
       return { messageId: parsed.id, status: 'skipped' }
     }
 
+    // Newsletter fast-path: List-Unsubscribe header is the de-facto marker
+    // for bulk senders (RFC 8058). Skip the classifier completely and file
+    // the mail as fyi/newsletter — saves an LLM call per newsletter.
+    // Don't fast-path if the sender has attachments (could be a real invoice
+    // from a vendor billing system that also includes List-Unsubscribe).
+    if (parsed.hasListUnsubscribe && parsed.attachments.length === 0) {
+      return await ingestNewsletterFastPath(parsed)
+    }
+
     const classification = await classify({
       from: parsed.from,
       to: parsed.to,
@@ -161,17 +170,25 @@ export async function ingestMessage(
         })
       }
     } else if (classification.intent === 'action_required' && doc?.id) {
+      // Cost optimization: only auto-draft when the sender is in our persons DB.
+      // For unknown senders, create a draftless task — user taps [📝 Draft]
+      // on the Telegram card if they actually want a reply generated.
+      // Saves Sonnet calls on misclassified spam / cold outreach.
+      const senderKnown = classification.sender_person_id !== null
+
       let draft: string | null = null
-      try {
-        draft = await draftReply({
-          originalFrom: parsed.from,
-          originalSubject: parsed.subject,
-          originalBody: parsed.bodyText,
-          language: classification.language,
-          summary: classification.summary,
-        })
-      } catch (err) {
-        logger.error({ err, messageId: parsed.id }, 'draft generation failed')
+      if (senderKnown) {
+        try {
+          draft = await draftReply({
+            originalFrom: parsed.from,
+            originalSubject: parsed.subject,
+            originalBody: parsed.bodyText,
+            language: classification.language,
+            summary: classification.summary,
+          })
+        } catch (err) {
+          logger.error({ err, messageId: parsed.id }, 'draft generation failed')
+        }
       }
 
       const [task] = await db
@@ -189,16 +206,16 @@ export async function ingestMessage(
       taskCreated = true
       fritzState = 'draft-pending'
 
-      if (task?.id && draft) {
+      if (task?.id) {
         await notifyDraft({
           taskId: task.id,
           fromName: parsed.from.name,
           fromEmail: parsed.from.email,
           subject: parsed.subject,
           summary: classification.summary,
-          draftText: draft,
+          draftText: draft ?? '',
           urgency: classification.urgency,
-          senderUnknown: classification.sender_person_id === null,
+          senderUnknown: !senderKnown,
         })
       }
     } else if (doc?.id) {
@@ -338,6 +355,68 @@ async function uploadAttachments(
   }
 
   return paths
+}
+
+/**
+ * Heuristic-only ingestion for newsletters: no LLM call, no draft, no notify.
+ * The classifier was burning ~85% of its calls on mails that are clearly bulk
+ * (List-Unsubscribe header present). This path files them as fyi/newsletter
+ * and labels them Fritz/seen so they're still inventoried.
+ */
+async function ingestNewsletterFastPath(
+  parsed: ParsedMessage,
+): Promise<IngestionResult> {
+  const summary = parsed.subject
+  const [doc] = await db
+    .insert(documents)
+    .values({
+      source: 'gmail',
+      sourceId: parsed.id,
+      receivedAt: parsed.receivedAt,
+      summary,
+      originalSubject: parsed.subject,
+      metadata: {
+        from_email: parsed.from.email,
+        from_name: parsed.from.name ?? null,
+        thread_id: parsed.threadId,
+        intent: 'fyi',
+        urgency: 'low',
+        language: null,
+        doc_type: 'newsletter',
+        suggested_action: 'none',
+        suggested_forward_to: null,
+        attachments: [],
+        fast_path: 'newsletter_list_unsubscribe',
+      },
+    })
+    .returning({ id: documents.id })
+
+  await upsertThread({
+    externalId: parsed.threadId,
+    domainId: null,
+    topicId: null,
+    from: parsed.from.email,
+    to: parsed.to,
+    receivedAt: parsed.receivedAt,
+    summary,
+  })
+
+  // Label the mail in Gmail so it's still visible as "seen by Fritz"
+  const gmail = makeGmailClient()
+  void setFritzState(gmail, parsed.id, 'seen')
+
+  logger.info(
+    { messageId: parsed.id, from: parsed.from.email },
+    'newsletter fast-path (no LLM call)',
+  )
+
+  return {
+    messageId: parsed.id,
+    status: 'ingested',
+    documentId: doc?.id,
+    dropboxPaths: [],
+    taskCreated: false,
+  }
 }
 
 async function resolveSenderRole(
