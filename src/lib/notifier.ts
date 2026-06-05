@@ -284,6 +284,119 @@ export async function notifyExtended(detail: {
   await safeSend(text)
 }
 
+/* ---------------- Rankwell webhook → Telegram ---------------- */
+
+export interface RankwellActionNotification {
+  id: string
+  agent: string
+  actionType: string
+  hypothesis: string
+  page?: string
+  cluster?: string
+  target?: {
+    metric?: string
+    expectedDelta?: number
+    unit?: string
+    windowDays?: number
+  }
+  reasoning?: string
+  rankwellUrl: string
+}
+
+/**
+ * Render a Rankwell action.proposed event as a Telegram message with
+ * inline [Approve] / [Reject] / [Open] buttons. The button callbacks
+ * carry the action id via `rw-approve:<id>` / `rw-reject:<id>` / no
+ * callback for the URL button (it's a deep link).
+ */
+export async function notifyRankwellAction(
+  input: RankwellActionNotification,
+): Promise<void> {
+  if (!registeredBot || registeredUserId === null) {
+    logger.debug('notifier not registered, skipping rankwell action')
+    return
+  }
+
+  const target = input.target
+  const targetLine = target?.metric
+    ? `${target.metric} expected ${target.expectedDelta != null && target.expectedDelta > 0 ? '+' : ''}${target.expectedDelta ?? 0}${target.unit ?? ''} over ${target.windowDays ?? 28}d`
+    : null
+
+  const pageRef = input.page ? shortLine(input.page, 80) : '—'
+
+  const lines = [
+    `🟢 *Rankwell* · ${escapeMd(input.agent)} · ${escapeMd(input.actionType)}`,
+    escapeMd(shortLine(input.hypothesis, 280)),
+  ]
+  if (targetLine) {
+    lines.push('', `_Target:_ ${escapeMd(targetLine)}`)
+  }
+  if (input.reasoning) {
+    lines.push('', `_${escapeMd(shortLine(input.reasoning, 200))}_`)
+  }
+  lines.push('', `\`${escapeMd(pageRef)}\``)
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Genehmigen', `rw-approve:${input.id}`)
+    .text('✖️ Ablehnen', `rw-reject:${input.id}`)
+    .row()
+    .url('📂 In Rankwell öffnen', input.rankwellUrl)
+
+  await safeSend(lines.join('\n'), keyboard)
+}
+
+export interface RankwellRecommendationNotification {
+  id: string
+  title: string
+  summary: string
+  severity: 'high' | 'medium' | 'low'
+  impactEstimate?: string | null
+  affectedCount?: number
+  suggestedActionCount?: number
+  rankwellUrl: string
+}
+
+/**
+ * Render a Rankwell recommendation.proposed event as a Telegram message.
+ * Inline buttons: Implement / Dismiss / Open. One message per
+ * recommendation (operator requested no aggregation).
+ */
+export async function notifyRankwellRecommendation(
+  input: RankwellRecommendationNotification,
+): Promise<void> {
+  if (!registeredBot || registeredUserId === null) {
+    logger.debug('notifier not registered, skipping rankwell recommendation')
+    return
+  }
+
+  const sevIcon =
+    input.severity === 'high' ? '🔴' : input.severity === 'medium' ? '🟡' : '⚪'
+
+  const lines = [
+    `${sevIcon} *Rankwell-Empfehlung* · ${escapeMd(input.severity)}`,
+    `*${escapeMd(shortLine(input.title, 120))}*`,
+    '',
+    escapeMd(truncate(input.summary, 800)),
+  ]
+  const meta: string[] = []
+  if (input.impactEstimate) meta.push(`💡 ${input.impactEstimate}`)
+  if (input.affectedCount && input.affectedCount > 0) {
+    meta.push(`📄 ${input.affectedCount} Seiten`)
+  }
+  if (input.suggestedActionCount && input.suggestedActionCount > 0) {
+    meta.push(`🤖 ${input.suggestedActionCount} Aktionen bereit`)
+  }
+  if (meta.length > 0) lines.push('', escapeMd(meta.join(' · ')))
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Umsetzen', `rw-rec-impl:${input.id}`)
+    .text('✖️ Verwerfen', `rw-rec-dismiss:${input.id}`)
+    .row()
+    .url('📂 Öffnen', input.rankwellUrl)
+
+  await safeSend(lines.join('\n'), keyboard)
+}
+
 async function safeSend(
   text: string,
   keyboard?: InlineKeyboard,

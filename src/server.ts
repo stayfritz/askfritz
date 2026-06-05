@@ -5,6 +5,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator'
 import 'dotenv/config'
 import { logger } from './lib/logger.js'
 import { gmailWebhook } from './routes/gmail-webhook.js'
+import { rankwellWebhook } from './routes/rankwell-webhook.js'
 import { syncConfigToDb } from './core/sync-config.js'
 import { GmailPoller } from './core/poller.js'
 import {
@@ -32,6 +33,7 @@ app.get('/health', (c) =>
 )
 
 app.route('/webhooks/gmail', gmailWebhook)
+app.route('/webhooks/rankwell', rankwellWebhook)
 
 async function bootstrap(): Promise<void> {
   logger.info('booting askfritz...')

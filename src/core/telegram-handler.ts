@@ -29,6 +29,12 @@ import {
   createEvent,
   makeCalendarClient,
 } from '../integrations/calendar/client.js'
+import {
+  approveAction as rankwellApproveAction,
+  rejectAction as rankwellRejectAction,
+  implementRecommendation as rankwellImplementRecommendation,
+  dismissRecommendation as rankwellDismissRecommendation,
+} from '../integrations/rankwell/client.js'
 import { logger } from '../lib/logger.js'
 
 /**
@@ -480,6 +486,84 @@ export function registerTelegramHandlers(
       await ctx.reply(
         `⚠️ Mehr-Details-Anzeige fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`,
       )
+    }
+  })
+
+  /* ---------------- Rankwell action + recommendation callbacks ---------------- */
+
+  bot.callbackQuery(/^rw-approve:(.+)$/, async (ctx) => {
+    const id = ctx.match[1]
+    if (!id) {
+      await ctx.answerCallbackQuery('Action-ID fehlt')
+      return
+    }
+    const result = await rankwellApproveAction(id)
+    if (result.ok) {
+      await ctx.answerCallbackQuery('Genehmigt ✅')
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+      await ctx.reply('Rankwell-Aktion genehmigt — wird jetzt veröffentlicht.')
+    } else {
+      logger.warn({ id, err: result.error }, 'rankwell:approve-failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(`⚠️ Genehmigung fehlgeschlagen: ${result.error}`)
+    }
+  })
+
+  bot.callbackQuery(/^rw-reject:(.+)$/, async (ctx) => {
+    const id = ctx.match[1]
+    if (!id) {
+      await ctx.answerCallbackQuery('Action-ID fehlt')
+      return
+    }
+    const result = await rankwellRejectAction(id)
+    if (result.ok) {
+      await ctx.answerCallbackQuery('Abgelehnt ✖️')
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+      await ctx.reply('Rankwell-Aktion abgelehnt.')
+    } else {
+      logger.warn({ id, err: result.error }, 'rankwell:reject-failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(`⚠️ Ablehnen fehlgeschlagen: ${result.error}`)
+    }
+  })
+
+  bot.callbackQuery(/^rw-rec-impl:(.+)$/, async (ctx) => {
+    const id = ctx.match[1]
+    if (!id) {
+      await ctx.answerCallbackQuery('Recommendation-ID fehlt')
+      return
+    }
+    const result = await rankwellImplementRecommendation(id)
+    if (result.ok) {
+      const count = result.data?.enqueued ?? 0
+      const capped = result.data?.capped ? ' (begrenzt auf 25)' : ''
+      await ctx.answerCallbackQuery(`${count} Jobs eingereiht`)
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+      await ctx.reply(
+        `Empfehlung umgesetzt — ${count} Agent-Job${count === 1 ? '' : 's'} eingereiht${capped}.`,
+      )
+    } else {
+      logger.warn({ id, err: result.error }, 'rankwell:rec-impl-failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(`⚠️ Umsetzen fehlgeschlagen: ${result.error}`)
+    }
+  })
+
+  bot.callbackQuery(/^rw-rec-dismiss:(.+)$/, async (ctx) => {
+    const id = ctx.match[1]
+    if (!id) {
+      await ctx.answerCallbackQuery('Recommendation-ID fehlt')
+      return
+    }
+    const result = await rankwellDismissRecommendation(id)
+    if (result.ok) {
+      await ctx.answerCallbackQuery('Verworfen ✖️')
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+      await ctx.reply('Empfehlung verworfen.')
+    } else {
+      logger.warn({ id, err: result.error }, 'rankwell:rec-dismiss-failed')
+      await ctx.answerCallbackQuery('Fehler')
+      await ctx.reply(`⚠️ Verwerfen fehlgeschlagen: ${result.error}`)
     }
   })
 
